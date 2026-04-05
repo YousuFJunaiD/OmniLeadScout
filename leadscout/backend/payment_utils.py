@@ -21,7 +21,9 @@ PLAN_AMOUNTS = {
 }
 
 
-def create_razorpay_order(plan: str, receipt: str) -> Dict[str, Any]:
+import httpx
+
+async def create_razorpay_order(plan: str, receipt: str) -> Dict[str, Any]:
     amount = PLAN_AMOUNTS.get(plan, 0)
     if plan not in PLAN_AMOUNTS:
         raise ValueError("Invalid plan")
@@ -31,20 +33,21 @@ def create_razorpay_order(plan: str, receipt: str) -> Dict[str, Any]:
         raise RuntimeError("Razorpay configuration missing")
 
     auth = base64.b64encode(f"{RAZORPAY_KEY_ID}:{RAZORPAY_KEY_SECRET}".encode("utf-8")).decode("utf-8")
-    response = requests.post(
-        "https://api.razorpay.com/v1/orders",
-        headers={
-            "Authorization": f"Basic {auth}",
-            "Content-Type": "application/json",
-        },
-        json={
-            "amount": amount,
-            "currency": "INR",
-            "receipt": receipt,
-            "payment_capture": 1,
-        },
-        timeout=10,
-    )
+    
+    async with httpx.AsyncClient(timeout=10) as client:
+        response = await client.post(
+            "https://api.razorpay.com/v1/orders",
+            headers={
+                "Authorization": f"Basic {auth}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "amount": amount,
+                "currency": "INR",
+                "receipt": receipt,
+                "payment_capture": 1,
+            }
+        )
     if response.status_code >= 400:
         raise RuntimeError("Failed to create payment order")
     data = response.json()
@@ -53,7 +56,6 @@ def create_razorpay_order(plan: str, receipt: str) -> Dict[str, Any]:
         "amount": amount,
         "key_id": RAZORPAY_KEY_ID,
     }
-
 
 def verify_razorpay_signature(order_id: str, payment_id: str, signature: str) -> bool:
     if not RAZORPAY_KEY_SECRET:

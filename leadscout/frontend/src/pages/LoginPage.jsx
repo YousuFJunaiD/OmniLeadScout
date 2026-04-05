@@ -1,15 +1,16 @@
+import React from "react";
 import { useState } from "react"
 import { Link, useNavigate } from "react-router-dom"
 import SparklesBg from "../components/SparklesBg"
 
-const API = import.meta.env.VITE_API_URL || "http://localhost:8000"
+const API = import.meta.env.VITE_API_URL || "http://127.0.0.1:8001"
 
 export default function LoginPage({ onLogin }) {
   const [mode, setMode]     = useState("login")
   const [form, setForm]     = useState({ name: "", email: "", password: "" })
   const [error, setError]   = useState("")
   const [loading, setLoading] = useState(false)
-  const nav = useNavigate()
+  const navigate = useNavigate()
 
   const submit = async () => {
     setError(""); setLoading(true)
@@ -21,9 +22,12 @@ export default function LoginPage({ onLogin }) {
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.detail || "Failed")
-      onLogin(data)
-      nav("/dashboard")
-    } catch (e) { setError(e.message) }
+      
+      onLogin({ token: data.token, user: data.user })
+      navigate("/dashboard")
+    } catch (e) { 
+      setError(e.message) 
+    }
     setLoading(false)
   }
 

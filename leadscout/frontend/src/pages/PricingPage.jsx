@@ -1,3 +1,4 @@
+import React from "react";
 import { useState } from "react"
 import { Link, useNavigate } from "react-router-dom"
 import Nav from "../components/Nav"
@@ -143,7 +144,7 @@ const fmt = (n) => n === null ? "Custom" : `₹${n.toLocaleString("en-IN")}`
 
 // ── Component ────────────────────────────────────────────────────────────���────
 
-const API = import.meta.env.VITE_API_URL || "http://localhost:8000"
+const API = import.meta.env.VITE_API_URL || "http://127.0.0.1:8001"
 
 const loadRazorpay = () =>
   new Promise((resolve) => {

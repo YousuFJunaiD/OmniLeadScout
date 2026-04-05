@@ -1,10 +1,11 @@
+import React from "react";
 import { useEffect, useMemo, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import Nav from "../components/Nav"
 import SparklesBg from "../components/SparklesBg"
 import { authFetch } from "../lib/auth"
 
-const API = import.meta.env.VITE_API_URL || "http://localhost:8000"
+const API = import.meta.env.VITE_API_URL || "http://127.0.0.1:8001"
 
 function toCsv(rows) {
   if (!rows.length) return ""

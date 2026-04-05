@@ -1,10 +1,11 @@
+import React from "react";
 import { useEffect, useMemo, useRef, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import Nav from "../components/Nav"
 import SparklesBg from "../components/SparklesBg"
 import { authFetch } from "../lib/auth"
 
-const API = import.meta.env.VITE_API_URL || "http://localhost:8000"
+const API = import.meta.env.VITE_API_URL || "http://127.0.0.1:8001"
 const WS_BASE = API.replace(/^http/i, "ws")
 const LIVE_FEED_MAX_ROWS = 200
 const LIVE_FEED_FLUSH_MS = 700
@@ -778,7 +779,7 @@ export default function DashboardPage({ user, onLogout }) {
       if (ws !== wsRef.current) return
 
       if (keepSocketAliveRef.current && localStorage.getItem(ACTIVE_JOB_KEY) === id) {
-        const timeoutDelay = Math.min(1000 * Math.pow(2, retryCountRef.current), 10000)
+        const timeoutDelay = Math.max(3000, Math.min(3000 * Math.pow(2, retryCountRef.current), 30000))
         retryCountRef.current += 1
         console.log(`[WS] Scheduling reconnect in ${timeoutDelay}ms`)
         setTimeout(async () => {

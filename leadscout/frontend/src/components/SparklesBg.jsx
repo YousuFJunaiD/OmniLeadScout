@@ -1,3 +1,4 @@
+import React from "react";
 import Particles, { initParticlesEngine } from "@tsparticles/react"
 import { loadSlim } from "@tsparticles/slim"
 import { motion, useAnimation } from "framer-motion"

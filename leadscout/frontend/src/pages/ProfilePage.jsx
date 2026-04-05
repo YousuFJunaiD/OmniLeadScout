@@ -1,10 +1,11 @@
+import React from "react";
 import { useEffect, useMemo, useRef, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import Nav from "../components/Nav"
 import SparklesBg from "../components/SparklesBg"
 import { authFetch } from "../lib/auth"
 
-const API = "http://localhost:8000"
+const API = "http://127.0.0.1:8001"
 
 export default function ProfilePage({ user, onLogout }) {
   const navigate = useNavigate()
@@ -154,7 +155,7 @@ export default function ProfilePage({ user, onLogout }) {
 
   useEffect(() => {
     refreshHistory({ firstLoad: true })
-    const id = setInterval(() => refreshHistory(), 15000)
+    const id = setInterval(() => refreshHistory(), 30000)
     return () => clearInterval(id)
   }, [user.id])
 

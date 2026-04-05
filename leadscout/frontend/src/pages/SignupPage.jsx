@@ -1,8 +1,9 @@
+import React from "react";
 import { useState } from "react"
 import { Link, useNavigate } from "react-router-dom"
 import SparklesBg from "../components/SparklesBg"
 
-const API = import.meta.env.VITE_API_URL || "http://localhost:8000"
+const API = import.meta.env.VITE_API_URL || "http://127.0.0.1:8001"
 
 export default function SignupPage({ onLogin }) {
   const [form, setForm]     = useState({ name: "", email: "", password: "" })

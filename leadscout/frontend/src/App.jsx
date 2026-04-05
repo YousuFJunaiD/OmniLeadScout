@@ -1,3 +1,4 @@
+import React from "react";
 import { useEffect, useState } from "react"
 import { Navigate, Route, BrowserRouter as Router, Routes } from "react-router-dom"
 import AdminPage from "./pages/AdminPage"
@@ -10,7 +11,7 @@ import SignupPage from "./pages/SignupPage"
 import PricingPage from "./pages/PricingPage"
 import { clearAuth, getStoredUser, getToken, isTokenExpired, setStoredUser, setToken, tryRefreshToken } from "./lib/auth"
 
-const API = import.meta.env.VITE_API_URL || "http://localhost:8000"
+const API = import.meta.env.VITE_API_URL || "http://127.0.0.1:8001"
 
 export default function App() {
   const [user, setUser] = useState(null)

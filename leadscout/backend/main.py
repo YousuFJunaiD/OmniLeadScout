@@ -17,11 +17,12 @@ import uuid
 import hashlib
 import sqlite3
 from datetime import datetime, timedelta
+from functools import lru_cache
 from pathlib import Path
 from typing import Optional
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -81,10 +82,13 @@ MAX_REQUEST_BYTES = int(os.getenv("MAX_REQUEST_BYTES", "1048576"))
 app = FastAPI(title="LeadScout API")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[FRONTEND_ORIGIN],
+    allow_origins=[
+        "http://localhost:5174",
+        "http://127.0.0.1:5174"
+    ],
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "x-user-id"],
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
@@ -92,6 +96,53 @@ app.add_middleware(
 async def unhandled_exception_handler(request: Request, exc: Exception):
     logging.exception("Unhandled error on %s %s", request.method, request.url.path)
     return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+
+_job_queue = None
+
+async def job_worker_loop(worker_id: int):
+    while True:
+        try:
+            if _job_queue is None:
+                await asyncio.sleep(1)
+                continue
+            job_id, job_type = await _job_queue.get()
+            try:
+                job = active_jobs.get(job_id)
+                if not job or job.get("status") != "pending":
+                    continue
+                    
+                job["status"] = "running"
+                try:
+                    if job_type == "v2":
+                        await asyncio.wait_for(run_job_v2(job_id), timeout=300)
+                    else:
+                        await asyncio.wait_for(run_job(job_id), timeout=300)
+                except Exception as e:
+                    logging.error(f"[Worker {worker_id}] Job {job_id} failed: {e}")
+                    if not job.get("retried"):
+                        job["retried"] = True
+                        job["status"] = "pending"
+                        await asyncio.sleep(3)
+                        await _job_queue.put((job_id, job_type))
+                    else:
+                        job["status"] = "failed"
+            finally:
+                _job_queue.task_done()
+        except Exception as global_err:
+            logging.error(f"[Worker {worker_id}] Critical loop error: {global_err}")
+            await asyncio.sleep(5)
+
+@app.on_event("startup")
+async def startup_event():
+    global _job_queue
+    _job_queue = asyncio.Queue(maxsize=100)
+    for i in range(5):
+        asyncio.create_task(job_worker_loop(i))
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    logging.info("Shutting down workers gracefully...")
+    # Drain tasks if necessary or let process terminate natively
 
 DB_PATH    = "leadscout.db"
 OUTPUT_DIR = Path("../output")
@@ -102,6 +153,25 @@ auth_scheme = HTTPBearer(auto_error=False)
 EVENT_BUFFER_LIMIT = 800
 WS_QUEUE_MAXSIZE = 120
 
+_history_cache = {}
+_usage_cache = {}
+CACHE_TTL = 30
+
+def _get_cached_history(user_id):
+    cached = _history_cache.get(user_id)
+    if cached and time.time() - cached[1] < CACHE_TTL:
+        return cached[0]
+    data = list_user_history_supabase(user_id)
+    _history_cache[user_id] = (data, time.time())
+    return data
+
+def _get_cached_usage(user_id):
+    cached = _usage_cache.get(user_id)
+    if cached and time.time() - cached[1] < CACHE_TTL:
+        return cached[0]
+    data = calculate_usage(user_id)
+    _usage_cache[user_id] = (data, time.time())
+    return data
 
 def _env_int(name: str, default: int, min_value: int, max_value: int) -> int:
     raw = os.getenv(name)
@@ -121,7 +191,7 @@ BLOCK_RECOVERY_MAX_ATTEMPTS = _env_int("LEADSCOUT_BLOCK_RECOVERY_MAX_ATTEMPTS", 
 V2_BATCH_SIZE = _env_int("LEADSCOUT_V2_BATCH_SIZE", 5, 1, 10)
 V2_SCRAPE_CONCURRENCY = _env_int("LEADSCOUT_V2_SCRAPE_CONCURRENCY", 5, 1, 10)
 V2_WEBSITE_CONCURRENCY = _env_int("LEADSCOUT_V2_WEBSITE_CONCURRENCY", 8, 1, 20)
-RATE_LIMIT_REQUESTS = _env_int("LEADSCOUT_RATE_LIMIT_REQUESTS", 10, 1, 200)
+RATE_LIMIT_REQUESTS = _env_int("LEADSCOUT_RATE_LIMIT_REQUESTS", 200, 1, 1000)
 RATE_LIMIT_WINDOW_SECONDS = _env_int("LEADSCOUT_RATE_LIMIT_WINDOW_SECONDS", 60, 10, 3600)
 REQUEST_TIMEOUT_SECONDS = _env_int("LEADSCOUT_REQUEST_TIMEOUT_SECONDS", 8, 5, 10)
 REQUEST_DELAY_MIN_MS = _env_int("LEADSCOUT_REQUEST_DELAY_MIN_MS", 500, 100, 5000)
@@ -228,6 +298,13 @@ def create_auth_response(user: dict) -> dict:
     return {"token": token, "user": public_user}
 
 
+@lru_cache(maxsize=1000)
+def get_cached_user(user_id: str):
+    user = get_user_by_id(user_id)
+    if user:
+        return {k: v for k, v in user.items() if k not in ["hashed_password", "password_hash", "token", "access_token"]}
+    return None
+
 def get_current_user(
     request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(auth_scheme),
@@ -241,7 +318,7 @@ def get_current_user(
         logging.warning("Auth failed: invalid token for %s", request.url.path)
         raise HTTPException(401, "Invalid authorization token")
     try:
-        user = get_user_by_id(user_id)
+        user = get_cached_user(user_id)
     except Exception as exc:
         logging.error("Auth backend unavailable on %s: %s", request.url.path, exc)
         raise HTTPException(500, "Authentication backend unavailable")
@@ -271,8 +348,8 @@ def build_job_csv_path(niche: str, job_id: str) -> str:
     return str(OUTPUT_DIR / f"{_safe_slug(niche)}_{job_id[:8]}.csv")
 
 
-def _send_welcome_email(user: dict):
-    send_email(
+async def _send_welcome_email(user: dict):
+    await send_email(
         user.get("email", ""),
         "Welcome to LeadScout",
         f"""
@@ -283,8 +360,8 @@ def _send_welcome_email(user: dict):
     )
 
 
-def _send_payment_email(user: dict, plan: str, amount: int):
-    send_email(
+async def _send_payment_email(user: dict, plan: str, amount: int):
+    await send_email(
         user.get("email", ""),
         "LeadScout payment confirmed",
         f"""
@@ -295,10 +372,10 @@ def _send_payment_email(user: dict, plan: str, amount: int):
     )
 
 
-def _send_scrape_ready_email(user: dict, lead_count: int, status: str):
+async def _send_scrape_ready_email(user: dict, lead_count: int, status: str):
     if status != "completed":
         return
-    send_email(
+    await send_email(
         user.get("email", ""),
         "Your LeadScout leads are ready",
         f"""
@@ -697,7 +774,7 @@ async def run_job(job_id: str):
             usage_user = get_user_by_id(user_id)
             calculate_usage(user_id)
             if usage_user:
-                _send_scrape_ready_email(usage_user, accepted_leads, final_status)
+                await _send_scrape_ready_email(usage_user, accepted_leads, final_status)
         except Exception as exc:
             publish_event(job, {"type": "info", "data": f"Supabase job sync failed: {exc}"})
         job["status"] = final_status
@@ -763,12 +840,16 @@ def find_matching_running_job(user_id: str, profession: str, location: str, nich
     return None
 
 
+_db_pool = None
+
 def get_db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA synchronous=NORMAL")
-    conn.row_factory = sqlite3.Row
-    return conn
+    global _db_pool
+    if _db_pool is None:
+        _db_pool = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=10)
+        _db_pool.execute("PRAGMA journal_mode=WAL")
+        _db_pool.execute("PRAGMA synchronous=NORMAL")
+        _db_pool.row_factory = sqlite3.Row
+    return _db_pool
 
 
 def init_db():
@@ -1189,7 +1270,12 @@ async def run_job_v2(job_id: str):
             conn.commit()
             pending_rows = []
 
-        scrape_semaphore = asyncio.Semaphore(V2_SCRAPE_CONCURRENCY)
+        plan = (get_cached_user(user_id) or {}).get("plan", "free").lower()
+        if plan == "starter": concurrency = 2
+        elif plan == "pro": concurrency = 5
+        elif plan in ("agency", "enterprise"): concurrency = 10
+        else: concurrency = 1
+        scrape_semaphore = asyncio.Semaphore(concurrency)
         work_items = []
         for query in queries:
             if enable_maps:
@@ -1319,7 +1405,7 @@ async def run_job_v2(job_id: str):
             usage_user = get_user_by_id(user_id)
             calculate_usage(user_id)
             if usage_user:
-                _send_scrape_ready_email(usage_user, accepted_leads, final_status)
+                await _send_scrape_ready_email(usage_user, accepted_leads, final_status)
         except Exception as exc:
             publish_event(job, {"type": "info", "data": f"Supabase job sync failed: {exc}"})
         job["status"] = final_status
@@ -1347,7 +1433,7 @@ async def run_job_v2(job_id: str):
 
 
 @app.post("/scrape/v2/start")
-async def start_scrape_v2(body: ScrapeV2Body, current_user=Depends(get_current_user)):
+async def start_scrape_v2(body: ScrapeV2Body, background_tasks: BackgroundTasks, current_user=Depends(get_current_user)):
     user_id = current_user["id"]
     requested_platforms = {
         "maps": body.enable_maps,
@@ -1357,10 +1443,7 @@ async def start_scrape_v2(body: ScrapeV2Body, current_user=Depends(get_current_u
     usage = None
     try:
         usage = calculate_usage(user_id)
-        print(f"PLAN: {usage['plan']}")
-        print(f"LEADS USED: {usage['leads_used_this_month']}")
-        print(f"SEARCHES TODAY: {usage['searches_today']}")
-        print(f"LIMITS: {usage['limits']}")
+        logging.info("Scrape V2 Start -> PLAN: %s, LEADS USED: %s, SEARCHES TODAY: %s, LIMITS: %s", usage['plan'], usage['leads_used_this_month'], usage['searches_today'], usage['limits'])
         enforce_plan(user_id, requested_platforms)
     except PermissionError as exc:
         usage = usage or calculate_usage(user_id)
@@ -1373,6 +1456,16 @@ async def start_scrape_v2(body: ScrapeV2Body, current_user=Depends(get_current_u
                 "searches_today": usage["searches_today"],
                 "limits": usage["limits"],
             },
+        )
+
+    plan = (usage.get("plan") or "free").lower()
+    max_jobs = 2 if plan == "starter" else 3 if plan == "pro" else 5 if plan in ("agency", "enterprise") else 1
+    active_for_user = sum(1 for j in active_jobs.values() if j.get("user_id") == user_id and j.get("status") in ("pending", "running", "stopping"))
+    
+    if active_for_user >= max_jobs:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": f"Max active jobs ({max_jobs}) reached for plan {plan}. Upgrade to run more simultaneously."}
         )
 
     job_id    = str(uuid.uuid4())
@@ -1390,7 +1483,7 @@ async def start_scrape_v2(body: ScrapeV2Body, current_user=Depends(get_current_u
             body.city,
             body.niche,
             json.dumps(body.queries),
-            "running", 0, "[]", total, job_id,
+            "pending", 0, "[]", total, job_id,
         ),
     )
     conn.commit()
@@ -1402,11 +1495,12 @@ async def start_scrape_v2(body: ScrapeV2Body, current_user=Depends(get_current_u
         queries=body.queries,
         platforms=requested_platforms,
         website_filter=body.website_filter,
-        status="running",
+        status="pending",
     )
 
     active_jobs[job_id] = {
-        "status":          "running",
+        "status":          "pending",
+        "type":            "v2",
         "city":            body.city,
         "queries":         body.queries,
         "enable_maps":     body.enable_maps,
@@ -1429,12 +1523,17 @@ async def start_scrape_v2(body: ScrapeV2Body, current_user=Depends(get_current_u
         "finished_at":     None,
         "current_query":   "",
     }
-    active_jobs[job_id]["task"] = asyncio.create_task(run_job_v2(job_id))
+    try:
+        _job_queue.put_nowait((job_id, "v2"))
+        logging.info(f"System Queue Size: {_job_queue.qsize()} / 100")
+    except asyncio.QueueFull:
+        logging.error("Job Queue is globally full under heavy load")
+        raise HTTPException(429, "System is currently at maximum capacity. Please try again later.")
     return {"job_id": job_id}
 
 
 @app.post("/auth/register")
-def register(body: RegisterBody, request: Request):
+def register(body: RegisterBody, request: Request, background_tasks: BackgroundTasks):
     rate_key = _auth_rate_limit_key(request, body.email)
     if not _enforce_rate_limit(auth_attempt_log, rate_key, AUTH_RATE_LIMIT_REQUESTS, AUTH_RATE_LIMIT_WINDOW_SECONDS):
         logging.warning("Auth rate limit exceeded on register for %s", body.email)
@@ -1447,7 +1546,7 @@ def register(body: RegisterBody, request: Request):
         full_name=body.name,
         hashed_password=hash_password_bcrypt(body.password),
     )
-    _send_welcome_email(user)
+    background_tasks.add_task(_send_welcome_email, user)
     return create_auth_response(user)
 
 
@@ -1543,9 +1642,9 @@ def select_plan(body: SelectPlanBody, current_user=Depends(get_current_user)):
 
 
 @app.post("/payment/create-order")
-def payment_create_order(body: CreateOrderBody, current_user=Depends(get_current_user)):
+async def payment_create_order(body: CreateOrderBody, current_user=Depends(get_current_user)):
     try:
-        order = create_razorpay_order(body.plan, receipt=f"{current_user['id']}_{uuid.uuid4().hex[:12]}")
+        order = await create_razorpay_order(body.plan, receipt=f"{current_user['id']}_{uuid.uuid4().hex[:12]}")
         logging.info("Payment order created for user %s plan %s amount %s", current_user["id"], body.plan, order["amount"])
         return order
     except ValueError as exc:
@@ -1555,7 +1654,7 @@ def payment_create_order(body: CreateOrderBody, current_user=Depends(get_current
 
 
 @app.post("/payment/verify")
-def payment_verify(body: VerifyPaymentBody, current_user=Depends(get_current_user)):
+def payment_verify(body: VerifyPaymentBody, background_tasks: BackgroundTasks, current_user=Depends(get_current_user)):
     if not verify_razorpay_signature(
         body.razorpay_order_id,
         body.razorpay_payment_id,
@@ -1581,7 +1680,7 @@ def payment_verify(body: VerifyPaymentBody, current_user=Depends(get_current_use
         body.razorpay_order_id,
         body.razorpay_payment_id,
     )
-    _send_payment_email(user, body.plan, amount)
+    background_tasks.add_task(_send_payment_email, user, body.plan, amount)
     return {"ok": True, "user": _public_user(user)}
 
 
@@ -1591,10 +1690,7 @@ async def start_scrape(body: ScrapeBody, current_user=Depends(get_current_user))
     usage = None
     try:
         usage = calculate_usage(user_id)
-        print(f"PLAN: {usage['plan']}")
-        print(f"LEADS USED: {usage['leads_used_this_month']}")
-        print(f"SEARCHES TODAY: {usage['searches_today']}")
-        print(f"LIMITS: {usage['limits']}")
+        logging.info("Scrape V1 Start -> PLAN: %s, LEADS USED: %s, SEARCHES TODAY: %s, LIMITS: %s", usage['plan'], usage['leads_used_this_month'], usage['searches_today'], usage['limits'])
         enforce_plan(user_id, {"maps": True, "justdial": False, "indiamart": False})
     except PermissionError as exc:
         usage = usage or calculate_usage(user_id)
@@ -1607,6 +1703,16 @@ async def start_scrape(body: ScrapeBody, current_user=Depends(get_current_user))
                 "searches_today": usage["searches_today"],
                 "limits": usage["limits"],
             },
+        )
+
+    plan = (usage.get("plan") or "free").lower()
+    max_jobs = 2 if plan == "starter" else 3 if plan == "pro" else 5 if plan in ("agency", "enterprise") else 1
+    active_for_user = sum(1 for j in active_jobs.values() if j.get("user_id") == user_id and j.get("status") in ("pending", "running", "stopping"))
+    
+    if active_for_user >= max_jobs:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": f"Max active jobs ({max_jobs}) reached for plan {plan}. Upgrade to run more simultaneously."}
         )
 
     job_id   = str(uuid.uuid4())
@@ -1622,7 +1728,7 @@ async def start_scrape(body: ScrapeBody, current_user=Depends(get_current_user))
             location,
             body.niche,
             json.dumps(body.areas),
-            "running",
+            "pending",
             0,
             "[]",
             len(body.areas),
@@ -1639,10 +1745,11 @@ async def start_scrape(body: ScrapeBody, current_user=Depends(get_current_user))
         queries=body.areas,
         platforms={"maps": True, "justdial": False, "indiamart": False},
         website_filter="all",
-        status="running",
+        status="pending",
     )
     active_jobs[job_id] = {
-        "status": "running",
+        "status": "pending",
+        "type": "v1",
         "profession": body.profession,
         "areas": body.areas,
         "user_id": user_id,
@@ -1657,7 +1764,12 @@ async def start_scrape(body: ScrapeBody, current_user=Depends(get_current_user))
         "current_query": "",
         "location": location,
     }
-    active_jobs[job_id]["task"] = asyncio.create_task(run_job(job_id))
+    try:
+        _job_queue.put_nowait((job_id, "v1"))
+        logging.info(f"System Queue Size: {_job_queue.qsize()} / 100")
+    except asyncio.QueueFull:
+        logging.error("Job Queue is globally full under heavy load")
+        raise HTTPException(429, "System is currently at maximum capacity. Please try again later.")
     return {"job_id": job_id}
 
 
@@ -1926,8 +2038,16 @@ def download_merged_job_ids_csv(user_id: str, job_ids: str, current_user=Depends
     return FileResponse(written, media_type="text/csv", filename=Path(written).name)
 
 
+_ws_connect_timers = {}
+
 @app.websocket("/ws/{job_id}")
 async def ws_scrape(ws: WebSocket, job_id: str):
+    now = time.time()
+    last_conn = _ws_connect_timers.get(job_id, 0)
+    if now - last_conn < 2.0:
+        await asyncio.sleep(2.0 - (now - last_conn))
+    _ws_connect_timers[job_id] = time.time()
+
     await ws.accept()
     logging.info(f"[WS] Accepted connection for job {job_id[:8]}")
 
@@ -2005,7 +2125,7 @@ async def ws_scrape(ws: WebSocket, job_id: str):
 
 @app.get("/user/history")
 def user_history(current_user=Depends(get_current_user)):
-    return {"history": list_user_history_supabase(current_user["id"])}
+    return {"history": _get_cached_history(current_user["id"])}
 
 
 @app.get("/user/history/{user_id}")
@@ -2033,7 +2153,7 @@ def user_leads(
 
 @app.get("/user/usage")
 def user_usage(current_user=Depends(get_current_user)):
-    return calculate_usage(current_user["id"])
+    return _get_cached_usage(current_user["id"])
 
 
 @app.get("/scrape/job/{job_id}/leads")
