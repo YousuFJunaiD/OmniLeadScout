@@ -21,7 +21,13 @@ export default function LoginPage({ onLogin }) {
         body: JSON.stringify(form),
       })
       const data = await res.json()
-      if (!res.ok) throw new Error(data.detail || "Failed")
+      if (!res.ok) {
+        if (res.status === 403 && data.detail?.includes("Waitlist active")) {
+          window.location.href = "https://omnimate.org/waitlist"
+          return
+        }
+        throw new Error(data.detail || "Failed")
+      }
       
       onLogin({ token: data.token, user: data.user })
       navigate("/dashboard")

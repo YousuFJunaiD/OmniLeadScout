@@ -82,11 +82,8 @@ MAX_REQUEST_BYTES = int(os.getenv("MAX_REQUEST_BYTES", "1048576"))
 app = FastAPI(title="LeadScout API")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5174",
-        "http://127.0.0.1:5174"
-    ],
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -283,6 +280,13 @@ def _public_user(user: dict) -> dict:
         "plan": plan.lower() if isinstance(plan, str) and plan else None,
         "role": user.get("role") or "user",
     }
+
+
+ALLOWED_USERS = [
+    "youremail@gmail.com",
+    "employee1@gmail.com",
+    "employee2@gmail.com"
+]
 
 
 def create_auth_response(user: dict) -> dict:
@@ -1434,6 +1438,10 @@ async def run_job_v2(job_id: str):
 
 @app.post("/scrape/v2/start")
 async def start_scrape_v2(body: ScrapeV2Body, background_tasks: BackgroundTasks, current_user=Depends(get_current_user)):
+    if current_user.get("email") not in ALLOWED_USERS:
+        print(f"Blocked waitlist user: {current_user.get('email')}")
+        raise HTTPException(status_code=403, detail="Waitlist active")
+
     user_id = current_user["id"]
     requested_platforms = {
         "maps": body.enable_maps,
@@ -1686,6 +1694,10 @@ def payment_verify(body: VerifyPaymentBody, background_tasks: BackgroundTasks, c
 
 @app.post("/scrape/start")
 async def start_scrape(body: ScrapeBody, current_user=Depends(get_current_user)):
+    if current_user.get("email") not in ALLOWED_USERS:
+        print(f"Blocked waitlist user: {current_user.get('email')}")
+        raise HTTPException(status_code=403, detail="Waitlist active")
+
     user_id = current_user["id"]
     usage = None
     try:
