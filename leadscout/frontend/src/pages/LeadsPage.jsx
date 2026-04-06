@@ -5,7 +5,7 @@ import Nav from "../components/Nav"
 import SparklesBg from "../components/SparklesBg"
 import { authFetch } from "../lib/auth"
 
-const API = import.meta.env.VITE_API_URL || "http://127.0.0.1:8001"
+
 
 function toCsv(rows) {
   if (!rows.length) return ""
@@ -32,7 +32,7 @@ export default function LeadsPage({ user, onLogout }) {
     if (source) params.set("source", source)
     if (websiteStatus) params.set("website_status", websiteStatus)
 
-    const res = await authFetch(`${API}/user/leads?${params.toString()}`, {}, () => navigate("/login"))
+    const res = await authFetch(`/api/user/leads?${params.toString()}`, {}, () => navigate("/login"))
     if (!res.ok) {
       setLoading(false)
       return

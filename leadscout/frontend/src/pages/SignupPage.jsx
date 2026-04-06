@@ -3,7 +3,7 @@ import { useState } from "react"
 import { Link, useNavigate } from "react-router-dom"
 import SparklesBg from "../components/SparklesBg"
 
-const API = import.meta.env.VITE_API_URL || "http://127.0.0.1:8001"
+
 
 export default function SignupPage({ onLogin }) {
   const [form, setForm]     = useState({ name: "", email: "", password: "" })
@@ -19,7 +19,7 @@ export default function SignupPage({ onLogin }) {
     }
     setError(""); setLoading(true)
     try {
-      const res  = await fetch(`${API}/auth/register`, {
+      const res  = await fetch(`/api/auth/register`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(form),

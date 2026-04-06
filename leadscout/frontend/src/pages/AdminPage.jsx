@@ -5,7 +5,7 @@ import Nav from "../components/Nav"
 import SparklesBg from "../components/SparklesBg"
 import { authFetch } from "../lib/auth"
 
-const API = import.meta.env.VITE_API_URL || "http://127.0.0.1:8001"
+
 
 export default function AdminPage({ user, onLogout }) {
   const navigate = useNavigate()
@@ -20,9 +20,9 @@ export default function AdminPage({ user, onLogout }) {
   const loadAdmin = () => {
     setLoading(true)
     Promise.all([
-      authRequest(`${API}/admin/users`).then(r => r.json()),
-      authRequest(`${API}/admin/jobs`).then(r => r.json()),
-      authRequest(`${API}/admin/stats`).then(r => r.json()),
+      authRequest(`/api/admin/users`).then(r => r.json()),
+      authRequest(`/api/admin/jobs`).then(r => r.json()),
+      authRequest(`/api/admin/stats`).then(r => r.json()),
     ]).then(([u, j, s]) => { setUsers(u.users||[]); setJobs(j.jobs||[]); setStats(s); setLoading(false) })
     .catch(() => setLoading(false))
   }
@@ -34,7 +34,7 @@ export default function AdminPage({ user, onLogout }) {
   const updateUser = async (targetUser) => {
     setSavingUserId(targetUser.id)
     try {
-      const res = await authRequest(`${API}/admin/update-user`, {
+      const res = await authRequest(`/api/admin/update-user`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -53,7 +53,7 @@ export default function AdminPage({ user, onLogout }) {
   }
 
   const dlAny = async (jobId, name) => {
-      const res  = await authRequest(`${API}/scrape/download/${jobId}`)
+      const res  = await authRequest(`/api/scrape/download/${jobId}`)
     const blob = await res.blob()
     const url  = URL.createObjectURL(blob)
     const a    = document.createElement("a")

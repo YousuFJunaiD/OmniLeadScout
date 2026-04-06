@@ -333,6 +333,12 @@ def get_current_user(
         if not _enforce_rate_limit(user_request_log, user_id, RATE_LIMIT_REQUESTS, RATE_LIMIT_WINDOW_SECONDS):
             logging.warning("Rate limit exceeded for user %s on %s", user_id, request.url.path)
             raise HTTPException(429, "Rate limit exceeded")
+            
+    # Apply strict whitelist
+    if user.get("email") not in ALLOWED_USERS:
+        logging.warning("Unauthorized waitlist access blocked for %s", user.get("email"))
+        raise HTTPException(403, "Waitlist active")
+        
     return user
 
 
@@ -844,16 +850,12 @@ def find_matching_running_job(user_id: str, profession: str, location: str, nich
     return None
 
 
-_db_pool = None
-
 def get_db():
-    global _db_pool
-    if _db_pool is None:
-        _db_pool = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=10)
-        _db_pool.execute("PRAGMA journal_mode=WAL")
-        _db_pool.execute("PRAGMA synchronous=NORMAL")
-        _db_pool.row_factory = sqlite3.Row
-    return _db_pool
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=10)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.row_factory = sqlite3.Row
+    return conn
 
 
 def init_db():
@@ -866,6 +868,11 @@ def init_db():
             password_hash TEXT NOT NULL,
             role TEXT DEFAULT 'user',
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS waitlist (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            email TEXT UNIQUE NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
         CREATE TABLE IF NOT EXISTS jobs (
             job_id TEXT PRIMARY KEY,
@@ -1438,9 +1445,7 @@ async def run_job_v2(job_id: str):
 
 @app.post("/scrape/v2/start")
 async def start_scrape_v2(body: ScrapeV2Body, background_tasks: BackgroundTasks, current_user=Depends(get_current_user)):
-    if current_user.get("email") not in ALLOWED_USERS:
-        print(f"Blocked waitlist user: {current_user.get('email')}")
-        raise HTTPException(status_code=403, detail="Waitlist active")
+
 
     user_id = current_user["id"]
     requested_platforms = {
@@ -1542,6 +1547,13 @@ async def start_scrape_v2(body: ScrapeV2Body, background_tasks: BackgroundTasks,
 
 @app.post("/auth/register")
 def register(body: RegisterBody, request: Request, background_tasks: BackgroundTasks):
+    if not body.email or "@" not in body.email:
+        raise HTTPException(400, "Invalid email format")
+    if not body.password or len(body.password) < 6:
+        raise HTTPException(400, "Password must be at least 6 characters")
+    if not body.name or not body.name.strip():
+        raise HTTPException(400, "Name is required")
+
     rate_key = _auth_rate_limit_key(request, body.email)
     if not _enforce_rate_limit(auth_attempt_log, rate_key, AUTH_RATE_LIMIT_REQUESTS, AUTH_RATE_LIMIT_WINDOW_SECONDS):
         logging.warning("Auth rate limit exceeded on register for %s", body.email)
@@ -1560,6 +1572,11 @@ def register(body: RegisterBody, request: Request, background_tasks: BackgroundT
 
 @app.post("/auth/login")
 def login(body: LoginBody, request: Request):
+    if not body.email or "@" not in body.email:
+        raise HTTPException(400, "Invalid email format")
+    if not body.password:
+        raise HTTPException(400, "Password is required")
+
     rate_key = _auth_rate_limit_key(request, body.email)
     if not _enforce_rate_limit(auth_attempt_log, rate_key, AUTH_RATE_LIMIT_REQUESTS, AUTH_RATE_LIMIT_WINDOW_SECONDS):
         logging.warning("Auth rate limit exceeded on login for %s", body.email)
@@ -1694,9 +1711,7 @@ def payment_verify(body: VerifyPaymentBody, background_tasks: BackgroundTasks, c
 
 @app.post("/scrape/start")
 async def start_scrape(body: ScrapeBody, current_user=Depends(get_current_user)):
-    if current_user.get("email") not in ALLOWED_USERS:
-        print(f"Blocked waitlist user: {current_user.get('email')}")
-        raise HTTPException(status_code=403, detail="Waitlist active")
+
 
     user_id = current_user["id"]
     usage = None
@@ -2279,7 +2294,33 @@ def admin_stats(current_user=Depends(require_admin_user)):
         "avg_leads":      round(avg_leads) if avg_leads else 0,
     }
 
+@app.post("/waitlist")
+async def join_waitlist(data: dict):
+    email = data.get("email")
 
+    if not email:
+        raise HTTPException(400, "Email required")
+
+    conn = get_db()
+    try:
+        conn.execute("INSERT INTO waitlist (email) VALUES (?)", (email,))
+        conn.commit()
+    except sqlite3.IntegrityError:
+        conn.close()
+        return {"ok": False, "message": "Already joined"}
+    finally:
+        conn.close()
+
+    print("Saved to DB:", email)
+
+    return {"ok": True}
+
+@app.get("/waitlist/all")
+async def get_waitlist():
+    conn = get_db()
+    rows = conn.execute("SELECT email, created_at FROM waitlist ORDER BY created_at DESC").fetchall()
+    conn.close()
+    return [{"email": r["email"], "created_at": r["created_at"]} for r in rows]
 @app.get("/health")
 def health():
     return {"status": "ok", "version": "1.0.0"}

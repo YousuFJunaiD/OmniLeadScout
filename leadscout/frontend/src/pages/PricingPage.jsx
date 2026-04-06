@@ -144,7 +144,7 @@ const fmt = (n) => n === null ? "Custom" : `₹${n.toLocaleString("en-IN")}`
 
 // ── Component ────────────────────────────────────────────────────────────���────
 
-const API = import.meta.env.VITE_API_URL || "http://127.0.0.1:8001"
+
 
 const loadRazorpay = () =>
   new Promise((resolve) => {
@@ -203,7 +203,7 @@ export default function PricingPage({ user, onPlanSelected }) {
 
       if (plan.id === "starter") {
         const res = await authFetch(
-          `${API}/user/select-plan`,
+          `/api/user/select-plan`,
           {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -222,7 +222,7 @@ export default function PricingPage({ user, onPlanSelected }) {
       if (!ready) throw new Error("Payment checkout failed to load")
 
       const orderRes = await authFetch(
-        `${API}/payment/create-order`,
+        `/api/payment/create-order`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -244,7 +244,7 @@ export default function PricingPage({ user, onPlanSelected }) {
           handler: async (response) => {
             try {
               const verifyRes = await authFetch(
-                `${API}/payment/verify`,
+                `/api/payment/verify`,
                 {
                   method: "POST",
                   headers: { "Content-Type": "application/json" },

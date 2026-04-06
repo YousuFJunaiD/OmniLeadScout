@@ -9,9 +9,10 @@ import LoginPage from "./pages/LoginPage"
 import ProfilePage from "./pages/ProfilePage"
 import SignupPage from "./pages/SignupPage"
 import PricingPage from "./pages/PricingPage"
+import WaitlistPage from "./pages/WaitlistPage"
 import { clearAuth, getStoredUser, getToken, isTokenExpired, setStoredUser, setToken, tryRefreshToken } from "./lib/auth"
 
-const API = import.meta.env.VITE_API_URL || "http://127.0.0.1:8001"
+
 
 export default function App() {
   const [user, setUser] = useState(null)
@@ -26,7 +27,7 @@ export default function App() {
       return
     }
 
-    fetch(`${API}/auth/me`, {
+    fetch(`/api/auth/me`, {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then(async (res) => {
@@ -44,7 +45,7 @@ export default function App() {
   useEffect(() => {
     if (!user) return
     const interval = setInterval(() => {
-      tryRefreshToken(API)
+      tryRefreshToken("/api")
         .then((data) => {
           if (data?.user) setUser(data.user)
         })
@@ -79,6 +80,7 @@ export default function App() {
         <Route path="/dashboard" element={user ? (user.plan ? <DashboardPage user={user} onLogout={logout} /> : <Navigate to="/pricing" />) : <Navigate to="/login" />} />
         <Route path="/leads" element={user ? (user.plan ? <LeadsPage user={user} onLogout={logout} /> : <Navigate to="/pricing" />) : <Navigate to="/login" />} />
         <Route path="/profile"  element={user ? (user.plan ? <ProfilePage user={user} onLogout={logout} /> : <Navigate to="/pricing" />) : <Navigate to="/login" />} />
+        <Route path="/waitlist" element={<WaitlistPage />} />
         <Route path="/admin"    element={user?.role === "admin" ? <AdminPage user={user} onLogout={logout} /> : <Navigate to={user?.plan ? "/dashboard" : "/pricing"} />} />
       </Routes>
     </Router>

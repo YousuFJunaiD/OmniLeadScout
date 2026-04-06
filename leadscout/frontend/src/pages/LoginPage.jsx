@@ -3,7 +3,7 @@ import { useState } from "react"
 import { Link, useNavigate } from "react-router-dom"
 import SparklesBg from "../components/SparklesBg"
 
-const API = import.meta.env.VITE_API_URL || "http://127.0.0.1:8001"
+
 
 export default function LoginPage({ onLogin }) {
   const [mode, setMode]     = useState("login")
@@ -15,7 +15,7 @@ export default function LoginPage({ onLogin }) {
   const submit = async () => {
     setError(""); setLoading(true)
     try {
-      const res  = await fetch(`${API}${mode === "login" ? "/auth/login" : "/auth/register"}`, {
+      const res  = await fetch(`/api${mode === "login" ? "/auth/login" : "/auth/register"}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(form),
@@ -23,7 +23,8 @@ export default function LoginPage({ onLogin }) {
       const data = await res.json()
       if (!res.ok) {
         if (res.status === 403 && data.detail?.includes("Waitlist active")) {
-          window.location.href = "https://omnimate.org/waitlist"
+          const msg = encodeURIComponent("Access is currently limited. Join the waitlist.")
+          window.location.href = `/waitlist?msg=${msg}`
           return
         }
         throw new Error(data.detail || "Failed")

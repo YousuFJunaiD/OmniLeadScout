@@ -38,7 +38,14 @@ export function getStoredUser() {
 
 export function setStoredUser(user) {
   if (user) {
-    getStorage()?.setItem(USER_KEY, JSON.stringify(user))
+    const safeUser = { 
+      id: user.id, 
+      email: user.email, 
+      name: user.name || user.full_name, 
+      role: user.role, 
+      plan: user.plan 
+    }
+    getStorage()?.setItem(USER_KEY, JSON.stringify(safeUser))
   }
 }
 
@@ -79,6 +86,12 @@ export async function tryRefreshToken(apiBase) {
 export async function authFetch(url, options = {}, onUnauthorized) {
   const headers = getAuthHeaders(options.headers || {})
   const response = await fetch(url, { ...options, headers })
+  if (response.status === 403) {
+    clearAuth()
+    const msg = encodeURIComponent("Access is currently limited. Join the waitlist.")
+    window.location.href = `/waitlist?msg=${msg}`
+    return response
+  }
   if (response.status === 401) {
     clearAuth()
     if (onUnauthorized) onUnauthorized()

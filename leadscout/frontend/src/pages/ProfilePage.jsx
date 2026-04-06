@@ -5,7 +5,6 @@ import Nav from "../components/Nav"
 import SparklesBg from "../components/SparklesBg"
 import { authFetch } from "../lib/auth"
 
-const API = "http://127.0.0.1:8001"
 
 export default function ProfilePage({ user, onLogout }) {
   const navigate = useNavigate()
@@ -94,7 +93,7 @@ export default function ProfilePage({ user, onLogout }) {
     pollingBusyRef.current = true
     if (firstLoad) setLoading(true)
     try {
-      const baseRes = await authRequest(`${API}/user/history`)
+      const baseRes = await authRequest(`/api/user/history`)
       const baseData = await baseRes.json()
       let jobs = withEffectiveCounts(baseData.history || [])
 
@@ -103,7 +102,7 @@ export default function ProfilePage({ user, onLogout }) {
         const liveStatuses = await Promise.all(
           runningJobs.map(async (job) => {
             try {
-              const r = await authRequest(`${API}/scrape/status/${job.job_id}`)
+              const r = await authRequest(`/api/scrape/status/${job.job_id}`)
               if (!r.ok) return null
               const status = await r.json()
               return { job_id: job.job_id, status }
@@ -145,7 +144,7 @@ export default function ProfilePage({ user, onLogout }) {
   const deleteJob = async (targetJobId) => {
     if (!window.confirm("Delete this scrape and all its leads? This cannot be undone.")) return
     try {
-      await authRequest(`${API}/scrape/job/${targetJobId}`, {
+      await authRequest(`/api/scrape/job/${targetJobId}`, {
         method: "DELETE",
         headers: { "x-user-id": user.id },
       })
@@ -167,7 +166,7 @@ export default function ProfilePage({ user, onLogout }) {
   const resumeFromRow = async (job, restartFromBeginning = false) => {
     setWorkingJobId(job.job_id)
     try {
-      const res = await authRequest(`${API}/scrape/resume/${job.job_id}`, {
+      const res = await authRequest(`/api/scrape/resume/${job.job_id}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -189,7 +188,7 @@ export default function ProfilePage({ user, onLogout }) {
   }
 
   const download = async (jobId, filename) => {
-    const res  = await authRequest(`${API}/scrape/download/${jobId}`)
+    const res  = await authRequest(`/api/scrape/download/${jobId}`)
     const blob = await res.blob()
     const url  = URL.createObjectURL(blob)
     const a    = document.createElement("a")
@@ -200,7 +199,7 @@ export default function ProfilePage({ user, onLogout }) {
   const downloadAll = async () => {
     setDownloadingAll(true)
     try {
-      const res = await authRequest(`${API}/scrape/download/all/${user.id}`)
+      const res = await authRequest(`/api/scrape/download/all/${user.id}`)
       if (!res.ok) return
       const blob = await res.blob()
       const url = URL.createObjectURL(blob)
@@ -230,7 +229,7 @@ export default function ProfilePage({ user, onLogout }) {
     const idsToFetch = job.merged_job_ids ? job.merged_job_ids[0] : job.job_id
     
     try {
-      const res = await authRequest(`${API}/scrape/job/${idsToFetch}/leads`, {
+      const res = await authRequest(`/api/scrape/job/${idsToFetch}/leads`, {
         headers: { "x-user-id": user.id }
       })
       if (!res.ok) throw new Error("Failed")
