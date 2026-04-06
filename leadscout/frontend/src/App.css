@@ -92,12 +92,12 @@ html, body, #root {
   text-decoration: none;
 }
 .btn-primary {
-  background: #FFFFFF;
-  color: #000000;
-  border: 1px solid #FFFFFF;
+  background: #010308;
+  color: #FFFFFF;
+  border: 1px solid rgba(255,255,255,0.18);
 }
 .btn-primary:hover {
-  background: rgba(255,255,255,0.88);
+  background: rgba(255,255,255,0.04);
   transform: translateY(-1px);
 }
 .btn-ghost {
@@ -179,7 +179,7 @@ label {
 .dot {
   width: 6px; height: 6px;
   border-radius: 50%;
-  background: #FFFFFF;
+  background: rgba(255,255,255,0.28);
   box-shadow: 0 0 8px rgba(255,255,255,0.6);
   animation: pulse 2s infinite;
   display: inline-block;
@@ -214,7 +214,7 @@ label {
 }
 .progress-fill {
   height: 100%;
-  background: #FFFFFF;
+  background: rgba(255,255,255,0.18);
   border-radius: 0;
   transition: width 0.4s ease;
 }

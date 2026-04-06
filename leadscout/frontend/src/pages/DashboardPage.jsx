@@ -596,7 +596,7 @@ export default function DashboardPage({ user, onLogout }) {
 
   const refreshResumeCandidate = async () => {
     try {
-      const res = await authRequest(`/api/user/history`)
+      const res = await authRequest(`/user/history`)
       if (!res.ok) throw new Error("history failed")
       const data = await res.json()
       const history = data.history || []
@@ -632,7 +632,7 @@ export default function DashboardPage({ user, onLogout }) {
 
   const refreshUsage = async () => {
     try {
-      const res = await authRequest(`/api/user/usage`)
+      const res = await authRequest(`/user/usage`)
       if (!res.ok) throw new Error("usage failed")
       const data = await res.json()
       setUsage(data)
@@ -647,7 +647,7 @@ export default function DashboardPage({ user, onLogout }) {
 
   const canReconnectJob = async (id) => {
     try {
-      const res = await authRequest(`/api/scrape/status/${id}`)
+      const res = await authRequest(`/scrape/status/${id}`)
       if (!res.ok) return false
       const status = await res.json()
       return !!status?.running
@@ -669,7 +669,7 @@ export default function DashboardPage({ user, onLogout }) {
     setScraping(true)
 
     try {
-      const res = await authRequest(`/api/scrape/resume/${resumeCandidate.jobId}`, {
+      const res = await authRequest(`/scrape/resume/${resumeCandidate.jobId}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -850,7 +850,7 @@ export default function DashboardPage({ user, onLogout }) {
     setStats({ total: 0, withOwner: 0, withEmail: 0, withWebsite: 0 })
     setProgress({ current: 0, total: finalQueries.length, query: "" })
     try {
-      const res = await authRequest(`/api/scrape/v2/start`, {
+      const res = await authRequest(`/scrape/v2/start`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -902,7 +902,7 @@ export default function DashboardPage({ user, onLogout }) {
       wsRef.current.close()
       wsRef.current = null
     }
-    if (jobId) authRequest(`/api/scrape/stop/${jobId}`, { method: "POST" })
+    if (jobId) authRequest(`/scrape/stop/${jobId}`, { method: "POST" })
     setScraping(false)
     setTimeout(() => {
       setCanDownload(true)
@@ -913,7 +913,7 @@ export default function DashboardPage({ user, onLogout }) {
 
   const downloadCSV = async () => {
     if (!jobId) return
-    const res  = await authRequest(`/api/scrape/download/${jobId}`)
+    const res  = await authRequest(`/scrape/download/${jobId}`)
     const blob = await res.blob()
     const url  = URL.createObjectURL(blob)
     const a    = document.createElement("a")
@@ -924,7 +924,7 @@ export default function DashboardPage({ user, onLogout }) {
   const deleteJob = async (targetJobId) => {
     if (!confirm("Delete this scrape and all its leads? This cannot be undone.")) return
     try {
-      await authRequest(`/api/scrape/job/${targetJobId}`, {
+      await authRequest(`/scrape/job/${targetJobId}`, {
         method: "DELETE",
         headers: { "x-user-id": user.id },
       })
@@ -943,7 +943,7 @@ export default function DashboardPage({ user, onLogout }) {
 
   const refreshHistory = async () => {
     try {
-      const res = await authRequest(`/api/user/history`)
+      const res = await authRequest(`/user/history`)
       if (!res.ok) throw new Error("history failed")
       const data = await res.json()
       setHistory(data.history || [])
@@ -960,7 +960,7 @@ export default function DashboardPage({ user, onLogout }) {
     keepSocketAliveRef.current = true
     setJobId(savedJobId)
 
-    authRequest(`/api/scrape/status/${savedJobId}`)
+    authRequest(`/scrape/status/${savedJobId}`)
       .then(r => r.json())
       .then(status => {
         if (!mounted) return
@@ -1017,7 +1017,7 @@ export default function DashboardPage({ user, onLogout }) {
         const savedJobId = localStorage.getItem(ACTIVE_JOB_KEY)
         if (!savedJobId) return
         try {
-          const res = await authRequest(`/api/scrape/heartbeat/${savedJobId}`)
+          const res = await authRequest(`/scrape/heartbeat/${savedJobId}`)
           const hb = await res.json()
           if (hb.alive && hb.status === "running") {
             // Reconnect the WebSocket
@@ -1051,7 +1051,7 @@ export default function DashboardPage({ user, onLogout }) {
     if (scraping && jobId) {
       heartbeatRef.current = setInterval(async () => {
         try {
-          const res = await authRequest(`/api/scrape/heartbeat/${jobId}`)
+          const res = await authRequest(`/scrape/heartbeat/${jobId}`)
           const hb = await res.json()
           if (!hb.alive || hb.status !== "running") {
             flushLiveFeed()
@@ -1532,7 +1532,7 @@ export default function DashboardPage({ user, onLogout }) {
                               className="btn btn-ghost"
                               style={{ padding: "4px 10px", fontSize: 11 }}
                               onClick={async () => {
-                                const res = await authRequest(`/api/scrape/download/${h.job_id}`)
+                                const res = await authRequest(`/scrape/download/${h.job_id}`)
                                 const blob = await res.blob()
                                 const url = URL.createObjectURL(blob)
                                 const a = document.createElement("a")

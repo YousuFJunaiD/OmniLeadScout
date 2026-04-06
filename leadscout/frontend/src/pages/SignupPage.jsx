@@ -2,6 +2,7 @@ import React from "react";
 import { useState } from "react"
 import { Link, useNavigate } from "react-router-dom"
 import SparklesBg from "../components/SparklesBg"
+import { apiUrl, getApiHeaders } from "../lib/api"
 import { redirectToWaitlist } from "../lib/waitlist"
 
 
@@ -20,9 +21,9 @@ export default function SignupPage({ onLogin }) {
     }
     setError(""); setLoading(true)
     try {
-      const res  = await fetch(`/api/auth/register`, {
+      const res  = await fetch(apiUrl("/auth/register"), {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: getApiHeaders(),
         body: JSON.stringify(form),
       })
       const data = await res.json()

@@ -1,6 +1,8 @@
+import { redirectToWaitlist } from "./waitlist"
+import { apiUrl, getApiHeaders } from "./api"
+
 const TOKEN_KEY = "ls_token"
 const USER_KEY = "ls_user"
-import { redirectToWaitlist } from "./waitlist"
 
 function getStorage() {
   if (typeof window === "undefined") return null
@@ -22,7 +24,7 @@ export function clearToken() {
 export function getAuthHeaders(extra = {}) {
   const token = getToken()
   return {
-    ...extra,
+    ...getApiHeaders(extra),
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
   }
 }
@@ -67,12 +69,12 @@ export function isTokenExpired(token) {
   }
 }
 
-export async function tryRefreshToken(apiBase) {
+export async function tryRefreshToken() {
   const token = getToken()
   if (!token) return null
-  const response = await fetch(`${apiBase}/auth/refresh`, {
+  const response = await fetch(apiUrl("/auth/refresh"), {
     method: "POST",
-    headers: { Authorization: `Bearer ${token}` },
+    headers: getAuthHeaders(),
   })
   if (!response.ok) {
     clearAuth()
@@ -86,7 +88,7 @@ export async function tryRefreshToken(apiBase) {
 
 export async function authFetch(url, options = {}, onUnauthorized) {
   const headers = getAuthHeaders(options.headers || {})
-  const response = await fetch(url, { ...options, headers })
+  const response = await fetch(apiUrl(url), { ...options, headers })
   if (response.status === 403) {
     clearAuth()
     redirectToWaitlist({ reason: "access_restricted", source: "auth_fetch" })

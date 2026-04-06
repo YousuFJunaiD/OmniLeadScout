@@ -32,7 +32,7 @@ export default function LeadsPage({ user, onLogout }) {
     if (source) params.set("source", source)
     if (websiteStatus) params.set("website_status", websiteStatus)
 
-    const res = await authFetch(`/api/user/leads?${params.toString()}`, {}, () => navigate("/login"))
+    const res = await authFetch(`/user/leads?${params.toString()}`, {}, () => navigate("/login"))
     if (!res.ok) {
       setLoading(false)
       return

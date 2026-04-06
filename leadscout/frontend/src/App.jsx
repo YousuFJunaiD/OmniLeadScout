@@ -11,11 +11,21 @@ import SignupPage from "./pages/SignupPage"
 import PricingPage from "./pages/PricingPage"
 import WaitlistPage from "./pages/WaitlistPage"
 import { clearAuth, getStoredUser, getToken, isTokenExpired, setStoredUser, setToken, tryRefreshToken } from "./lib/auth"
+import { apiUrl, getApiHeaders } from "./lib/api"
 
 
 
 export default function App() {
   const [user, setUser] = useState(null)
+
+  const syncAdminEmail = (email) => {
+    if (typeof window === "undefined") return
+    if (email) {
+      window.localStorage.setItem("user_email", email)
+    } else {
+      window.localStorage.removeItem("user_email")
+    }
+  }
 
   useEffect(() => {
     const token = getToken()
@@ -27,25 +37,27 @@ export default function App() {
       return
     }
 
-    fetch(`/api/auth/me`, {
-      headers: { Authorization: `Bearer ${token}` },
+    fetch(apiUrl("/auth/me"), {
+      headers: getApiHeaders({ Authorization: `Bearer ${token}` }),
     })
       .then(async (res) => {
         if (!res.ok) throw new Error("unauthorized")
         const data = await res.json()
         setStoredUser(data.user)
         setUser(data.user)
+        syncAdminEmail(data.user?.email || "")
       })
       .catch(() => {
         clearAuth()
         setUser(null)
+        syncAdminEmail("")
       })
   }, [])
 
   useEffect(() => {
     if (!user) return
     const interval = setInterval(() => {
-      tryRefreshToken("/api")
+      tryRefreshToken()
         .then((data) => {
           if (data?.user) setUser(data.user)
         })
@@ -58,16 +70,19 @@ export default function App() {
     setToken(token)
     setStoredUser(userData)
     setUser(userData)
+    syncAdminEmail(userData?.email || "")
   }
 
   const logout = () => {
     clearAuth()
     setUser(null)
+    syncAdminEmail("")
   }
 
   const updateUser = (userData) => {
     setStoredUser(userData)
     setUser(userData)
+    syncAdminEmail(userData?.email || "")
   }
 
   return (
@@ -81,7 +96,7 @@ export default function App() {
         <Route path="/leads" element={user ? (user.plan ? <LeadsPage user={user} onLogout={logout} /> : <Navigate to="/pricing" />) : <Navigate to="/login" />} />
         <Route path="/profile"  element={user ? (user.plan ? <ProfilePage user={user} onLogout={logout} /> : <Navigate to="/pricing" />) : <Navigate to="/login" />} />
         <Route path="/waitlist" element={<WaitlistPage />} />
-        <Route path="/admin"    element={user?.role === "admin" ? <AdminPage user={user} onLogout={logout} /> : <Navigate to={user?.plan ? "/dashboard" : "/pricing"} />} />
+        <Route path="/admin"    element={<AdminPage user={user} onLogout={logout} />} />
       </Routes>
     </Router>
   )

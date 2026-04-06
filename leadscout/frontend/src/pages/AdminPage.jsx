@@ -1,64 +1,134 @@
 import React from "react";
-import { useEffect, useState } from "react"
-import { useNavigate } from "react-router-dom"
+import { useEffect, useMemo, useState } from "react"
+import { Link } from "react-router-dom"
 import Nav from "../components/Nav"
 import SparklesBg from "../components/SparklesBg"
-import { authFetch } from "../lib/auth"
+import { apiUrl, getApiHeaders } from "../lib/api"
 
-
+const ADMIN_EMAILS = (import.meta.env.VITE_ADMIN_EMAILS || "")
+  .split(",")
+  .map((email) => email.trim().toLowerCase())
+  .filter(Boolean)
 
 export default function AdminPage({ user, onLogout }) {
-  const navigate = useNavigate()
-  const [users, setUsers] = useState([])
-  const [jobs, setJobs]   = useState([])
-  const [stats, setStats] = useState({})
-  const [tab, setTab]     = useState("overview")
+  const [currentEmail, setCurrentEmail] = useState("")
+  const [waitlist, setWaitlist] = useState([])
   const [loading, setLoading] = useState(true)
-  const [savingUserId, setSavingUserId] = useState("")
-  const authRequest = (url, options = {}) => authFetch(url, options, () => navigate("/login"))
-
-  const loadAdmin = () => {
-    setLoading(true)
-    Promise.all([
-      authRequest(`/api/admin/users`).then(r => r.json()),
-      authRequest(`/api/admin/jobs`).then(r => r.json()),
-      authRequest(`/api/admin/stats`).then(r => r.json()),
-    ]).then(([u, j, s]) => { setUsers(u.users||[]); setJobs(j.jobs||[]); setStats(s); setLoading(false) })
-    .catch(() => setLoading(false))
-  }
+  const [approvingEmail, setApprovingEmail] = useState("")
+  const [feedback, setFeedback] = useState(null)
 
   useEffect(() => {
-    loadAdmin()
-  }, [user.id])
+    if (typeof window === "undefined") return
+    const storedEmail = (window.localStorage.getItem("user_email") || "").trim().toLowerCase()
+    setCurrentEmail(storedEmail)
+  }, [])
 
-  const updateUser = async (targetUser) => {
-    setSavingUserId(targetUser.id)
+  const isAllowed = useMemo(() => {
+    return Boolean(currentEmail) && ADMIN_EMAILS.includes(currentEmail)
+  }, [currentEmail])
+
+  useEffect(() => {
+    if (!isAllowed) {
+      setLoading(false)
+      return
+    }
+
+    let cancelled = false
+
+    const loadWaitlist = async () => {
+      setLoading(true)
+      setFeedback(null)
+      try {
+        const res = await fetch(apiUrl("/waitlist/all"), {
+          headers: getApiHeaders(),
+        })
+        const data = await res.json()
+        if (!res.ok) throw new Error("Failed to load waitlist")
+        if (!cancelled) {
+          setWaitlist(Array.isArray(data) ? data : [])
+        }
+      } catch {
+        if (!cancelled) {
+          setFeedback({ tone: "error", text: "Failed to load waitlist users." })
+        }
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+
+    loadWaitlist()
+    return () => {
+      cancelled = true
+    }
+  }, [isAllowed])
+
+  const approve = async (email) => {
+    setApprovingEmail(email)
+    setFeedback(null)
     try {
-      const res = await authRequest(`/api/admin/update-user`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          user_id: targetUser.id,
-          plan: targetUser.plan || null,
-          role: targetUser.role || null,
-        }),
+      const res = await fetch(apiUrl("/waitlist/approve"), {
+        method: "POST",
+        headers: getApiHeaders(),
+        body: JSON.stringify({ email }),
       })
-      if (!res.ok) throw new Error("update failed")
-      loadAdmin()
-    } catch {
-      alert("Failed to update user")
+      const data = await res.json().catch(() => null)
+      if (!res.ok) throw new Error(data?.detail || "Approval failed")
+
+      setWaitlist((prev) =>
+        prev.map((entry) =>
+          entry.email === email ? { ...entry, approved: 1 } : entry
+        )
+      )
+      setFeedback({ tone: "success", text: `${email} approved successfully.` })
+    } catch (error) {
+      setFeedback({ tone: "error", text: error.message || "Approval failed." })
     } finally {
-      setSavingUserId("")
+      setApprovingEmail("")
     }
   }
 
-  const dlAny = async (jobId, name) => {
-      const res  = await authRequest(`/api/scrape/download/${jobId}`)
-    const blob = await res.blob()
-    const url  = URL.createObjectURL(blob)
-    const a    = document.createElement("a")
-    a.href = url; a.download = name; a.click()
-    URL.revokeObjectURL(url)
+  const approvedCount = waitlist.filter((entry) => Number(entry.approved) === 1).length
+  const pendingCount = waitlist.length - approvedCount
+
+  const feedbackStyle = feedback?.tone === "success"
+    ? { border: "1px solid rgba(97, 219, 165, 0.28)", background: "rgba(97, 219, 165, 0.08)", color: "rgba(220,255,235,0.92)" }
+    : { border: "1px solid rgba(255,110,110,0.28)", background: "rgba(255,110,110,0.08)", color: "rgba(255,185,185,0.96)" }
+
+  if (!currentEmail) {
+    return (
+      <div className="page">
+        <SparklesBg />
+        <Nav user={user} onLogout={onLogout} />
+        <div style={{ paddingTop: 64, minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: "96px 24px 40px" }}>
+          <div className="card" style={{ maxWidth: 520, width: "100%", textAlign: "center" }}>
+            <span className="badge badge-red" style={{ marginBottom: 12, display: "inline-block" }}>Admin Only</span>
+            <h1 style={{ fontSize: 28, fontWeight: 800, letterSpacing: "-0.02em", marginBottom: 12 }}>Admin email missing</h1>
+            <p style={{ color: "var(--text-secondary)", lineHeight: 1.7 }}>
+              This page checks <code>localStorage.getItem("user_email")</code>. Set that value and make sure it exists in <code>VITE_ADMIN_EMAILS</code>.
+            </p>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  if (!isAllowed) {
+    return (
+      <div className="page">
+        <SparklesBg />
+        <Nav user={user} onLogout={onLogout} />
+        <div style={{ paddingTop: 64, minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: "96px 24px 40px" }}>
+          <div className="card" style={{ maxWidth: 560, width: "100%", textAlign: "center" }}>
+            <span className="badge badge-red" style={{ marginBottom: 12, display: "inline-block" }}>Access Denied</span>
+            <h1 style={{ fontSize: 28, fontWeight: 800, letterSpacing: "-0.02em", marginBottom: 12 }}>You do not have admin access</h1>
+            <p style={{ color: "var(--text-secondary)", lineHeight: 1.7, marginBottom: 18 }}>
+              Signed in as <strong style={{ color: "var(--text-primary)" }}>{currentEmail}</strong>. Ask the founder to add this email to <code>VITE_ADMIN_EMAILS</code>.
+            </p>
+            <Link to="/" className="btn btn-ghost">Back to home</Link>
+          </div>
+        </div>
+      </div>
+    )
   }
 
   return (
@@ -66,116 +136,90 @@ export default function AdminPage({ user, onLogout }) {
       <SparklesBg />
       <Nav user={user} onLogout={onLogout} />
       <div style={{ paddingTop: 64 }}>
-        <div style={{ maxWidth: 1200, margin: "0 auto", padding: "40px 24px" }} className="admin-shell">
-
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 28 }} className="anim-fade-up">
+        <div style={{ maxWidth: 1120, margin: "0 auto", padding: "40px 24px 80px" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", gap: 24, marginBottom: 28, flexWrap: "wrap" }} className="anim-fade-up">
             <div>
-              <span className="badge badge-red" style={{ marginBottom: 8, display: "inline-block" }}>Admin Only</span>
-              <h1 style={{ fontSize: 28, fontWeight: 800, letterSpacing: "-0.02em" }}>Control Panel</h1>
+              <span className="badge badge-red" style={{ marginBottom: 10, display: "inline-block" }}>Admin Only</span>
+              <h1 style={{ fontSize: 28, fontWeight: 800, letterSpacing: "-0.02em", marginBottom: 6 }}>Waitlist Approvals</h1>
+              <p style={{ color: "var(--text-secondary)", fontSize: 14 }}>
+                Review waitlist entries and approve teammates without leaving the dashboard.
+              </p>
             </div>
-            <div className="stat-pill"><span className="dot" /> System operational</div>
+            <div className="stat-pill"><span className="dot" /> {currentEmail}</div>
           </div>
 
           <div className="admin-kpi-grid stagger" style={{ marginBottom: 24 }}>
-            {[["Total Users",stats.total_users||0,"var(--accent-cyan)"],["Total Jobs",stats.total_jobs||0,"var(--accent-violet)"],["Total Leads",(stats.total_leads||0).toLocaleString(),"var(--accent-gold)"],["Active Now",stats.active_jobs||0,"var(--accent-green)"],["CSV Files",stats.total_files||0,"var(--text-secondary)"]].map(([l,v,c],i) => (
-              <div key={i} className="card" style={{ padding: "16px 20px" }}>
-                <div style={{ fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 6 }}>{l}</div>
-                <div style={{ fontSize: 26, fontWeight: 800, color: c, letterSpacing: "-0.02em", fontFamily: "var(--font-mono)" }}>{v}</div>
+            {[["Total Waitlist", waitlist.length], ["Approved", approvedCount], ["Pending", pendingCount]].map(([label, value]) => (
+              <div key={label} className="card" style={{ padding: "16px 20px" }}>
+                <div style={{ fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 6 }}>{label}</div>
+                <div style={{ fontSize: 26, fontWeight: 800, color: "var(--text-primary)", letterSpacing: "-0.02em", fontFamily: "var(--font-mono)" }}>{value}</div>
               </div>
             ))}
           </div>
 
-          <div style={{ display: "flex", gap: 4, marginBottom: 20, borderBottom: "1px solid var(--border)" }}>
-            {["overview","users","jobs"].map(t => (
-              <button key={t} onClick={() => setTab(t)} style={{ padding: "10px 20px", fontSize: 13, fontWeight: 600, background: "transparent", border: "none", borderBottom: `2px solid ${tab===t?"var(--accent-cyan)":"transparent"}`, color: tab===t?"var(--accent-cyan)":"var(--text-secondary)", cursor: "pointer", fontFamily: "var(--font-display)", textTransform: "capitalize", marginBottom: -1 }}>
-                {t}
-              </button>
-            ))}
+          {feedback && (
+            <div style={{ ...feedbackStyle, padding: "12px 16px", marginBottom: 18, fontSize: 13 }}>
+              {feedback.text}
+            </div>
+          )}
+
+          <div className="card anim-fade-in">
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 16, marginBottom: 18, flexWrap: "wrap" }}>
+              <div>
+                <p style={{ fontSize: 10, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--text-muted)", marginBottom: 6 }}>Waitlist Queue</p>
+                <h2 style={{ fontSize: 20, fontWeight: 800, letterSpacing: "-0.02em" }}>Approval panel</h2>
+              </div>
+              {loading && <span style={{ color: "var(--text-secondary)", fontSize: 13 }}>Loading waitlist...</span>}
+            </div>
+
+            <div className="table-wrap">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Email</th>
+                    <th>Joined</th>
+                    <th>Status</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {!loading && waitlist.length === 0 ? (
+                    <tr>
+                      <td colSpan={4} style={{ textAlign: "center", color: "var(--text-muted)" }}>No waitlist users found</td>
+                    </tr>
+                  ) : (
+                    waitlist.map((entry) => {
+                      const isApproved = Number(entry.approved) === 1
+                      const isSaving = approvingEmail === entry.email
+                      return (
+                        <tr key={entry.email}>
+                          <td>{entry.email}</td>
+                          <td style={{ fontSize: 12 }}>{entry.created_at ? new Date(entry.created_at).toLocaleString() : "—"}</td>
+                          <td>
+                            <span className={`badge ${isApproved ? "badge-green" : "badge-red"}`}>
+                              {isApproved ? "approved" : "pending"}
+                            </span>
+                          </td>
+                          <td style={{ textAlign: "right" }}>
+                            {!isApproved && (
+                              <button
+                                className="btn btn-primary"
+                                style={{ padding: "6px 14px", fontSize: 11 }}
+                                onClick={() => approve(entry.email)}
+                                disabled={isSaving}
+                              >
+                                {isSaving ? "Approving..." : "Approve"}
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      )
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
-
-          {tab === "overview" && (
-            <div className="card anim-fade-in">
-              {loading && <p style={{ fontSize: 13, color: "var(--text-secondary)", marginBottom: 14 }}>Loading admin data...</p>}
-              <p style={{ fontSize: 13, color: "var(--text-secondary)", lineHeight: 1.8, marginBottom: 20 }}>
-                Use <strong style={{ color: "var(--text-primary)" }}>Users</strong> tab to see all accounts. Use <strong style={{ color: "var(--text-primary)" }}>Jobs</strong> tab to see every scrape and download any CSV.
-              </p>
-              <div className="divider" />
-              <div className="admin-overview-grid" style={{ gap: 16 }}>
-                {[["Most active profession",stats.top_profession],["Most scraped city",stats.top_location],["Avg leads per job",stats.avg_leads]].map(([l,v],i) => (
-                  <div key={i}>
-                    <div style={{ fontSize: 10, color: "var(--text-muted)", marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.08em" }}>{l}</div>
-                    <div style={{ fontSize: 15, fontWeight: 600 }}>{v||"—"}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {tab === "users" && (
-            <div className="card anim-fade-in">
-              <div className="table-wrap">
-                <table className="data-table">
-                  <thead><tr><th>User</th><th>Email</th><th>Plan</th><th>Role</th><th>Scrapes</th><th>Total Leads</th><th>Joined</th><th></th></tr></thead>
-                  <tbody>
-                    {users.length === 0 && !loading ? (
-                      <tr><td colSpan={8} style={{ textAlign: "center", color: "var(--text-muted)" }}>No users found</td></tr>
-                    ) : users.map((u,i) => (
-                      <tr key={i}>
-                        <td>{u.name}</td><td>{u.email}</td>
-                        <td>
-                          <select value={u.plan || ""} onChange={(e) => setUsers(prev => prev.map(row => row.id === u.id ? { ...row, plan: e.target.value } : row))}>
-                            <option value="">None</option>
-                            <option value="starter">starter</option>
-                            <option value="pro">pro</option>
-                            <option value="growth">growth</option>
-                            <option value="enterprise">enterprise</option>
-                          </select>
-                        </td>
-                        <td>
-                          <select value={u.role || "user"} onChange={(e) => setUsers(prev => prev.map(row => row.id === u.id ? { ...row, role: e.target.value } : row))}>
-                            <option value="user">user</option>
-                            <option value="admin">admin</option>
-                          </select>
-                        </td>
-                        <td>{u.job_count||0}</td>
-                        <td style={{ color:"var(--accent-cyan)" }}>{(u.total_leads||0).toLocaleString()}</td>
-                        <td style={{ fontSize:11 }}>{u.created_at?new Date(u.created_at).toLocaleDateString():"—"}</td>
-                        <td>
-                          <button className="btn btn-ghost" style={{ padding:"4px 12px",fontSize:11 }} onClick={() => updateUser(u)} disabled={savingUserId === u.id}>
-                            {savingUserId === u.id ? "Saving..." : "Save"}
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
-
-          {tab === "jobs" && (
-            <div className="card anim-fade-in">
-              <div className="table-wrap">
-                <table className="data-table">
-                  <thead><tr><th>Job ID</th><th>User</th><th>Profession</th><th>Location</th><th>Leads</th><th>Status</th><th>Date</th><th></th></tr></thead>
-                  <tbody>
-                    {jobs.length === 0 && !loading ? (
-                      <tr><td colSpan={8} style={{ textAlign: "center", color: "var(--text-muted)" }}>No jobs found</td></tr>
-                    ) : jobs.map((j,i) => (
-                      <tr key={i}>
-                        <td style={{ fontFamily:"var(--font-mono)",fontSize:11,color:"var(--text-muted)" }}>#{j.job_id?.slice(0,8)}</td>
-                        <td>{j.user_name||j.user_id}</td><td>{j.profession}</td><td>{j.location}</td>
-                        <td style={{ color:"var(--accent-cyan)",fontFamily:"var(--font-mono)" }}>{Number(j.effective_lead_count ?? j.lead_count ?? 0).toLocaleString()}</td>
-                        <td><span className={`badge ${j.status==="completed"?"badge-green":j.status==="running"?"badge-cyan":"badge-red"}`}>{j.status}</span></td>
-                        <td style={{ fontSize:11 }}>{j.created_at?new Date(j.created_at).toLocaleDateString():"—"}</td>
-                        <td>{((j.status==="completed" || j.status==="stopped") && Number(j.effective_lead_count ?? j.lead_count ?? 0) > 0) && <button className="btn btn-ghost" style={{ padding:"4px 12px",fontSize:11 }} onClick={()=>dlAny(j.job_id,`admin_${j.profession}_${j.job_id?.slice(0,8)}.csv`)}>↓ CSV</button>}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
         </div>
       </div>
     </div>

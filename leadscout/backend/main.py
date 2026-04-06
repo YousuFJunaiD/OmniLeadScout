@@ -78,11 +78,22 @@ validate_required_env(
 
 FRONTEND_ORIGIN = require_env("FRONTEND_ORIGIN")
 MAX_REQUEST_BYTES = int(os.getenv("MAX_REQUEST_BYTES", "1048576"))
+ALLOWED_ORIGINS = sorted(
+    {
+        origin.strip()
+        for origin in [
+            *FRONTEND_ORIGIN.split(","),
+            "https://omnimate.org",
+            "https://www.omnimate.org",
+        ]
+        if origin.strip()
+    }
+)
 
 app = FastAPI(title="LeadScout API")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -872,6 +883,7 @@ def init_db():
         CREATE TABLE IF NOT EXISTS waitlist (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             email TEXT UNIQUE NOT NULL,
+            approved INTEGER DEFAULT 0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
         CREATE TABLE IF NOT EXISTS jobs (
@@ -928,6 +940,9 @@ def init_db():
         conn.execute("ALTER TABLE jobs ADD COLUMN root_job_id TEXT")
     if "resumed_from_job_id" not in cols:
         conn.execute("ALTER TABLE jobs ADD COLUMN resumed_from_job_id TEXT")
+    waitlist_cols = [r[1] for r in conn.execute("PRAGMA table_info(waitlist)").fetchall()]
+    if "approved" not in waitlist_cols:
+        conn.execute("ALTER TABLE waitlist ADD COLUMN approved INTEGER DEFAULT 0")
     conn.execute("UPDATE jobs SET root_job_id=job_id WHERE root_job_id IS NULL OR root_job_id='' ")
     conn.execute("UPDATE jobs SET completed_area_indexes='[]' WHERE completed_area_indexes IS NULL OR completed_area_indexes='' ")
 
@@ -2318,9 +2333,58 @@ async def join_waitlist(data: dict):
 @app.get("/waitlist/all")
 async def get_waitlist():
     conn = get_db()
-    rows = conn.execute("SELECT email, created_at FROM waitlist ORDER BY created_at DESC").fetchall()
+    rows = conn.execute(
+        "SELECT email, created_at, COALESCE(approved, 0) AS approved FROM waitlist ORDER BY created_at DESC"
+    ).fetchall()
     conn.close()
-    return [{"email": r["email"], "created_at": r["created_at"]} for r in rows]
+    return [
+        {"email": r["email"], "created_at": r["created_at"], "approved": int(r["approved"] or 0)}
+        for r in rows
+    ]
+
+@app.get("/waitlist/check")
+async def check_waitlist(email: str = Query(...)):
+    normalized_email = email.strip().lower()
+    conn = get_db()
+    row = conn.execute(
+        "SELECT email, created_at, COALESCE(approved, 0) AS approved FROM waitlist WHERE email = ?",
+        (normalized_email,),
+    ).fetchone()
+    conn.close()
+    if not row:
+        return {"exists": False, "approved": False}
+    return {
+        "exists": True,
+        "email": row["email"],
+        "created_at": row["created_at"],
+        "approved": bool(row["approved"]),
+    }
+
+@app.post("/waitlist/approve")
+async def approve_waitlist(data: dict):
+    email = (data.get("email") or "").strip().lower()
+    if not email:
+        raise HTTPException(400, "Email required")
+
+    conn = get_db()
+    cursor = conn.execute("UPDATE waitlist SET approved = 1 WHERE email = ?", (email,))
+    conn.commit()
+    row = conn.execute(
+        "SELECT email, created_at, COALESCE(approved, 0) AS approved FROM waitlist WHERE email = ?",
+        (email,),
+    ).fetchone()
+    conn.close()
+
+    if cursor.rowcount == 0 or not row:
+        raise HTTPException(404, "Waitlist entry not found")
+
+    return {
+        "ok": True,
+        "email": row["email"],
+        "created_at": row["created_at"],
+        "approved": int(row["approved"] or 0),
+    }
+
 @app.get("/health")
 def health():
     return {"status": "ok", "version": "1.0.0"}

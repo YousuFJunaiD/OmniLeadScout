@@ -1,6 +1,7 @@
 import { Link } from "react-router-dom"
 import { useEffect, useState } from "react"
 import SparklesBg from "../components/SparklesBg"
+import { apiUrl, getApiHeaders } from "../lib/api"
 import { consumeWaitlistContext } from "../lib/waitlist"
 
 const FEEDBACK = {
@@ -67,9 +68,9 @@ export default function WaitlistPage() {
     setFeedback(null)
 
     try {
-      const res = await fetch("/api/waitlist", {
+      const res = await fetch(apiUrl("/waitlist"), {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: getApiHeaders(),
         body: JSON.stringify({ email: normalizedEmail })
       })
 

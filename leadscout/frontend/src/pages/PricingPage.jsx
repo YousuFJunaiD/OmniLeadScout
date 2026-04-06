@@ -203,7 +203,7 @@ export default function PricingPage({ user, onPlanSelected }) {
 
       if (plan.id === "starter") {
         const res = await authFetch(
-          `/api/user/select-plan`,
+          `/user/select-plan`,
           {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -222,7 +222,7 @@ export default function PricingPage({ user, onPlanSelected }) {
       if (!ready) throw new Error("Payment checkout failed to load")
 
       const orderRes = await authFetch(
-        `/api/payment/create-order`,
+        `/payment/create-order`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -244,7 +244,7 @@ export default function PricingPage({ user, onPlanSelected }) {
           handler: async (response) => {
             try {
               const verifyRes = await authFetch(
-                `/api/payment/verify`,
+                `/payment/verify`,
                 {
                   method: "POST",
                   headers: { "Content-Type": "application/json" },
@@ -313,8 +313,8 @@ export default function PricingPage({ user, onPlanSelected }) {
       padding: "8px 22px", fontSize: 11, fontWeight: 700,
       letterSpacing: "0.1em", textTransform: "uppercase",
       cursor: "pointer", border: "1px solid rgba(255,255,255,0.2)",
-      background: active ? "#fff" : "transparent",
-      color: active ? "#000" : "rgba(255,255,255,0.55)",
+      background: active ? "rgba(255,255,255,0.04)" : "#010308",
+      color: active ? "#fff" : "rgba(255,255,255,0.55)",
       transition: "all 0.15s",
       fontFamily: "var(--font-display)",
     }),
@@ -375,7 +375,7 @@ export default function PricingPage({ user, onPlanSelected }) {
 
               {/* Popular badge */}
               {plan.popular && (
-                <div style={{ position: "absolute", top: -1, left: 0, right: 0, background: "#fff", color: "#000", textAlign: "center", padding: "4px 0", fontSize: 9, fontWeight: 800, letterSpacing: "0.18em", fontFamily: "var(--font-mono)" }}>
+                <div style={{ position: "absolute", top: -1, left: 0, right: 0, background: "#010308", color: "rgba(255,255,255,0.82)", textAlign: "center", padding: "4px 0", fontSize: 9, fontWeight: 800, letterSpacing: "0.18em", fontFamily: "var(--font-mono)", borderBottom: "1px solid rgba(255,255,255,0.12)" }}>
                   MOST POPULAR
                 </div>
               )}
@@ -420,9 +420,9 @@ export default function PricingPage({ user, onPlanSelected }) {
                   style={{
                     width: "100%", padding: "11px 0", fontSize: 11, fontWeight: 700,
                     letterSpacing: "0.12em", textTransform: "uppercase", cursor: "pointer",
-                    border: plan.popular ? "none" : "1px solid rgba(255,255,255,0.3)",
-                    background: plan.popular ? "#fff" : "transparent",
-                    color: plan.popular ? "#000" : "#fff",
+                    border: "1px solid rgba(255,255,255,0.18)",
+                    background: plan.popular ? "rgba(255,255,255,0.04)" : "#010308",
+                    color: "#fff",
                     fontFamily: "var(--font-display)", marginBottom: 24, transition: "opacity 0.15s",
                   }}
                   onMouseEnter={e => { e.currentTarget.style.opacity = "0.8" }}
@@ -475,7 +475,7 @@ export default function PricingPage({ user, onPlanSelected }) {
                   <span style={{ fontSize: 12, fontWeight: 600, color: sel ? "#fff" : "rgba(255,255,255,0.65)", letterSpacing: "0.03em", lineHeight: 1.4 }}>
                     {addon.name}
                   </span>
-                  <span style={{ fontSize: 11, width: 18, height: 18, border: `1px solid ${sel ? "#fff" : "rgba(255,255,255,0.25)"}`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, color: sel ? "#000" : "transparent", background: sel ? "#fff" : "transparent", fontWeight: 800, marginLeft: 10 }}>
+                  <span style={{ fontSize: 11, width: 18, height: 18, border: `1px solid ${sel ? "rgba(255,255,255,0.24)" : "rgba(255,255,255,0.25)"}`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, color: sel ? "#fff" : "transparent", background: sel ? "#010308" : "transparent", fontWeight: 800, marginLeft: 10 }}>
                     ✓
                   </span>
                 </div>
@@ -576,23 +576,23 @@ export default function PricingPage({ user, onPlanSelected }) {
 
       {/* ── Sticky add-ons bar ────────────────────────────────────────────── */}
       {selected.size > 0 && (
-        <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 200, background: "#fff", borderTop: "1px solid rgba(0,0,0,0.15)", padding: "14px 32px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <span style={{ fontSize: 13, color: "#000", fontWeight: 600, letterSpacing: "0.03em" }}>
+        <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 200, background: "#010308", borderTop: "1px solid rgba(255,255,255,0.12)", padding: "14px 32px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <span style={{ fontSize: 13, color: "#fff", fontWeight: 600, letterSpacing: "0.03em" }}>
             <strong>{selected.size}</strong> add-on{selected.size > 1 ? "s" : ""} selected
             &nbsp;·&nbsp;
             Total: <strong>₹{addonTotal.toLocaleString("en-IN")}</strong>
-            <span style={{ fontSize: 11, fontWeight: 400, color: "rgba(0,0,0,0.5)", marginLeft: 2 }}>/mo</span>
+            <span style={{ fontSize: 11, fontWeight: 400, color: "rgba(255,255,255,0.5)", marginLeft: 2 }}>/mo</span>
           </span>
           <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
             <button
               onClick={() => setSelected(new Set())}
-              style={{ fontSize: 11, background: "none", border: "1px solid rgba(0,0,0,0.2)", color: "rgba(0,0,0,0.5)", padding: "7px 14px", cursor: "pointer", letterSpacing: "0.08em", textTransform: "uppercase", fontFamily: "var(--font-display)", fontWeight: 600 }}
+              style={{ fontSize: 11, background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.12)", color: "rgba(255,255,255,0.62)", padding: "7px 14px", cursor: "pointer", letterSpacing: "0.08em", textTransform: "uppercase", fontFamily: "var(--font-display)", fontWeight: 600 }}
             >
               Clear
             </button>
             <Link
               to="/signup"
-              style={{ fontSize: 11, background: "#000", color: "#fff", border: "1px solid #000", padding: "8px 20px", textDecoration: "none", letterSpacing: "0.1em", textTransform: "uppercase", fontFamily: "var(--font-display)", fontWeight: 700 }}
+              style={{ fontSize: 11, background: "rgba(255,255,255,0.04)", color: "#fff", border: "1px solid rgba(255,255,255,0.18)", padding: "8px 20px", textDecoration: "none", letterSpacing: "0.1em", textTransform: "uppercase", fontFamily: "var(--font-display)", fontWeight: 700 }}
             >
               Get started →
             </Link>
