@@ -1,14 +1,15 @@
-import { Link } from "react-router-dom"
+import { Link, useNavigate } from "react-router-dom"
 import { useEffect, useState } from "react"
 import SparklesBg from "../components/SparklesBg"
 import { apiUrl, getApiHeaders } from "../lib/api"
+import { supabase } from "../lib/supabase"
 import { consumeWaitlistContext } from "../lib/waitlist"
 
 const FEEDBACK = {
-  success: {
+  pending: {
     tone: "success",
-    title: "You're on the list",
-    body: "Thanks for joining. We'll reach out as soon as access opens up."
+    title: "Early access pending",
+    body: "You're signed in and on the waitlist. We'll let you know as soon as your access is approved."
   },
   duplicate: {
     tone: "neutral",
@@ -24,6 +25,21 @@ const FEEDBACK = {
     tone: "error",
     title: "Enter a valid email",
     body: "Use a working email address so we can contact you when access opens."
+  },
+  linkSent: {
+    tone: "neutral",
+    title: "Check your inbox",
+    body: "We sent a sign-in link to your email. Open it to continue."
+  },
+  approved: {
+    tone: "success",
+    title: "Access approved",
+    body: "You're approved for LeadScout. Redirecting now."
+  },
+  config: {
+    tone: "error",
+    title: "Auth is unavailable",
+    body: "Supabase environment variables are missing for this deployment."
   }
 }
 
@@ -46,14 +62,102 @@ const ALERT_STYLES = {
 }
 
 export default function WaitlistPage() {
+  const navigate = useNavigate()
+  const [authMode, setAuthMode] = useState("signup")
   const [email, setEmail] = useState("")
   const [status, setStatus] = useState("idle")
   const [feedback, setFeedback] = useState(null)
   const [context, setContext] = useState(null)
+  const [sessionEmail, setSessionEmail] = useState("")
 
   useEffect(() => {
     setContext(consumeWaitlistContext())
   }, [])
+
+  useEffect(() => {
+    if (!supabase) {
+      setFeedback(FEEDBACK.config)
+      return
+    }
+
+    let mounted = true
+
+    supabase.auth.getSession().then(({ data }) => {
+      if (!mounted) return
+      const currentEmail = data.session?.user?.email?.trim().toLowerCase() || ""
+      setSessionEmail(currentEmail)
+      if (currentEmail) {
+        setEmail(currentEmail)
+      }
+    })
+
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+      const currentEmail = session?.user?.email?.trim().toLowerCase() || ""
+      setSessionEmail(currentEmail)
+      if (currentEmail) {
+        setEmail(currentEmail)
+      }
+    })
+
+    return () => {
+      mounted = false
+      listener.subscription.unsubscribe()
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!sessionEmail) return
+
+    let cancelled = false
+
+    const syncAccess = async () => {
+      setStatus("loading")
+      try {
+        const checkRes = await fetch(apiUrl(`/waitlist/check?email=${encodeURIComponent(sessionEmail)}`), {
+          headers: getApiHeaders(),
+        })
+        const checkData = await checkRes.json().catch(() => null)
+        if (!checkRes.ok) throw new Error(checkData?.detail || "Failed")
+
+        if (checkData?.access) {
+          if (!cancelled) {
+            setStatus("approved")
+            setFeedback(FEEDBACK.approved)
+            window.localStorage.setItem("user_email", sessionEmail)
+            setTimeout(() => navigate("/leadscout"), 500)
+          }
+          return
+        }
+
+        const joinRes = await fetch(apiUrl("/waitlist"), {
+          method: "POST",
+          headers: getApiHeaders(),
+          body: JSON.stringify({ email: sessionEmail }),
+        })
+        const joinData = await joinRes.json().catch(() => null)
+
+        if (!joinRes.ok) {
+          throw new Error(joinData?.detail || joinData?.message || "Failed")
+        }
+
+        if (!cancelled) {
+          setStatus(joinData?.ok === false ? "duplicate" : "pending")
+          setFeedback(joinData?.ok === false ? FEEDBACK.duplicate : FEEDBACK.pending)
+        }
+      } catch {
+        if (!cancelled) {
+          setStatus("error")
+          setFeedback(FEEDBACK.error)
+        }
+      }
+    }
+
+    syncAccess()
+
+    return () => {
+      cancelled = true
+    }
+  }, [navigate, sessionEmail])
 
   const submit = async () => {
     const normalizedEmail = email.trim().toLowerCase()
@@ -64,39 +168,43 @@ export default function WaitlistPage() {
       return
     }
 
+    if (!supabase) {
+      setStatus("error")
+      setFeedback(FEEDBACK.config)
+      return
+    }
+
     setStatus("loading")
     setFeedback(null)
 
     try {
-      const res = await fetch(apiUrl("/waitlist"), {
-        method: "POST",
-        headers: getApiHeaders(),
-        body: JSON.stringify({ email: normalizedEmail })
+      const redirectTo = `${window.location.origin}/waitlist`
+      const { error } = await supabase.auth.signInWithOtp({
+        email: normalizedEmail,
+        options: { emailRedirectTo: redirectTo }
       })
-
-      const data = await res.json().catch(() => null)
-
-      if (!res.ok) {
-        throw new Error(data?.detail || data?.message || "Failed")
-      }
-
-      if (data?.ok === false && data?.message === "Already joined") {
-        setStatus("duplicate")
-        setFeedback(FEEDBACK.duplicate)
-        return
-      }
-
-      setStatus("success")
-      setFeedback(FEEDBACK.success)
-      setEmail(normalizedEmail)
+      if (error) throw error
+      setStatus("link_sent")
+      setFeedback(FEEDBACK.linkSent)
     } catch {
       setStatus("error")
       setFeedback(FEEDBACK.error)
     }
   }
 
+  const signOut = async () => {
+    if (!supabase) return
+    await supabase.auth.signOut()
+    window.localStorage.removeItem("user_email")
+    setSessionEmail("")
+    setStatus("idle")
+    setFeedback(null)
+    setEmail("")
+  }
+
   const alertStyle = feedback ? ALERT_STYLES[feedback.tone] : null
   const showAccessNotice = context?.reason === "access_restricted"
+  const isSignedIn = Boolean(sessionEmail)
 
   return (
     <div className="page" style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "100vh", background: "#000" }}>
@@ -116,7 +224,7 @@ export default function WaitlistPage() {
             Waitlist Active
           </h2>
           <p style={{ fontSize: 13, color: "rgba(255,255,255,0.5)", lineHeight: 1.6, marginBottom: 24, letterSpacing: "0.02em" }}>
-            Access is currently limited while we roll out in stages. Join the waitlist and we&apos;ll let you know when your account can be activated.
+            Access is currently limited while we roll out in stages. Sign in with your email to join the waitlist and keep your early access session active across refreshes.
           </p>
 
           {showAccessNotice && (
@@ -143,17 +251,47 @@ export default function WaitlistPage() {
             type="email"
             placeholder="Enter your email address"
             value={email}
+            disabled={isSignedIn}
             onChange={(e) => {
               setEmail(e.target.value)
               if (feedback && status !== "loading") setFeedback(null)
             }}
-            style={{ width: "100%", background: "#000", border: "1px solid rgba(255,255,255,0.18)", color: "#fff", padding: "13px 16px", fontSize: 13, outline: "none", marginBottom: 12, fontFamily: "var(--font-body)", borderRadius: 0 }}
+            style={{ width: "100%", background: "#000", border: "1px solid rgba(255,255,255,0.18)", color: "#fff", padding: "13px 16px", fontSize: 13, outline: "none", marginBottom: 12, fontFamily: "var(--font-body)", borderRadius: 0, opacity: isSignedIn ? 0.72 : 1 }}
           />
-          <button onClick={submit} disabled={status === "loading"} className="btn btn-primary" style={{ display: "block", width: "100%", padding: "13px 0", fontSize: 12, letterSpacing: "0.12em", cursor: status === "loading" ? "not-allowed" : "pointer", border: "none" }}>
-            {status === "loading" ? "Joining..." : status === "success" ? "Joined" : "Join Waitlist →"}
+          {!isSignedIn && (
+            <div style={{ display: "flex", gap: 0, marginBottom: 12 }}>
+              {["signup", "signin"].map((mode) => (
+                <button
+                  key={mode}
+                  onClick={() => setAuthMode(mode)}
+                  style={{
+                    flex: 1,
+                    padding: "10px 0",
+                    fontSize: 11,
+                    letterSpacing: "0.12em",
+                    textTransform: "uppercase",
+                    background: authMode === mode ? "rgba(255,255,255,0.04)" : "#010308",
+                    color: authMode === mode ? "#fff" : "rgba(255,255,255,0.55)",
+                    border: "1px solid rgba(255,255,255,0.12)",
+                    cursor: "pointer",
+                    fontFamily: "var(--font-display)",
+                  }}
+                >
+                  {mode === "signup" ? "Sign Up" : "Sign In"}
+                </button>
+              ))}
+            </div>
+          )}
+          <button onClick={submit} disabled={status === "loading" || isSignedIn} className="btn btn-primary" style={{ display: "block", width: "100%", padding: "13px 0", fontSize: 12, letterSpacing: "0.12em", cursor: status === "loading" || isSignedIn ? "not-allowed" : "pointer", border: "none" }}>
+            {status === "loading" ? "Checking..." : isSignedIn ? "Signed In" : authMode === "signup" ? "Create Access Link →" : "Send Sign-In Link →"}
           </button>
+          {isSignedIn && (
+            <button onClick={signOut} className="btn btn-ghost" style={{ display: "block", width: "100%", padding: "13px 0", fontSize: 12, letterSpacing: "0.12em", border: "none", marginTop: 10 }}>
+              Sign Out
+            </button>
+          )}
           <p style={{ color: "rgba(255,255,255,0.32)", fontSize: 11, marginTop: 12, lineHeight: 1.6 }}>
-            We&apos;ll only use your email for access updates and product onboarding.
+            {isSignedIn ? `Signed in as ${sessionEmail}.` : "We'll only use your email for access updates and product onboarding."}
           </p>
         </div>
       </div>

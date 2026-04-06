@@ -4,6 +4,7 @@ import { Link } from "react-router-dom"
 import Nav from "../components/Nav"
 import SparklesBg from "../components/SparklesBg"
 import { apiUrl, getApiHeaders } from "../lib/api"
+import { supabase } from "../lib/supabase"
 
 const ADMIN_EMAILS = (import.meta.env.VITE_ADMIN_EMAILS || "")
   .split(",")
@@ -19,8 +20,30 @@ export default function AdminPage({ user, onLogout }) {
 
   useEffect(() => {
     if (typeof window === "undefined") return
-    const storedEmail = (window.localStorage.getItem("user_email") || "").trim().toLowerCase()
-    setCurrentEmail(storedEmail)
+
+    let mounted = true
+    const fallbackEmail = (window.localStorage.getItem("user_email") || "").trim().toLowerCase()
+
+    if (!supabase) {
+      setCurrentEmail(fallbackEmail)
+      return
+    }
+
+    supabase.auth.getSession().then(({ data }) => {
+      if (!mounted) return
+      const sessionEmail = data.session?.user?.email?.trim().toLowerCase() || fallbackEmail
+      setCurrentEmail(sessionEmail)
+    })
+
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+      const sessionEmail = session?.user?.email?.trim().toLowerCase() || fallbackEmail
+      setCurrentEmail(sessionEmail)
+    })
+
+    return () => {
+      mounted = false
+      listener.subscription.unsubscribe()
+    }
   }, [])
 
   const isAllowed = useMemo(() => {

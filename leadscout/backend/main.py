@@ -2337,10 +2337,16 @@ async def get_waitlist():
         "SELECT email, created_at, COALESCE(approved, 0) AS approved FROM waitlist ORDER BY created_at DESC"
     ).fetchall()
     conn.close()
-    return [
+
+    data = [
         {"email": r["email"], "created_at": r["created_at"], "approved": int(r["approved"] or 0)}
         for r in rows
     ]
+    if not data:
+        return []
+    if isinstance(data, dict):
+        return [data]
+    return data
 
 @app.get("/waitlist/check")
 async def check_waitlist(email: str = Query(...)):
@@ -2352,12 +2358,9 @@ async def check_waitlist(email: str = Query(...)):
     ).fetchone()
     conn.close()
     if not row:
-        return {"exists": False, "approved": False}
+        return {"access": False}
     return {
-        "exists": True,
-        "email": row["email"],
-        "created_at": row["created_at"],
-        "approved": bool(row["approved"]),
+        "access": bool(row["approved"]),
     }
 
 @app.post("/waitlist/approve")

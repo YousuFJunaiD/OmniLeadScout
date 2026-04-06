@@ -1,0 +1,14 @@
+venv
+.venv
+__pycache__
+*.pyc
+output
+tests
+*.db
+*.sqlite
+*.sqlite3
+.env
+.git
+node_modules
+dist
+build
