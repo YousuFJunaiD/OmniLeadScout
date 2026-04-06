@@ -1,5 +1,6 @@
 const TOKEN_KEY = "ls_token"
 const USER_KEY = "ls_user"
+import { redirectToWaitlist } from "./waitlist"
 
 function getStorage() {
   if (typeof window === "undefined") return null
@@ -88,8 +89,7 @@ export async function authFetch(url, options = {}, onUnauthorized) {
   const response = await fetch(url, { ...options, headers })
   if (response.status === 403) {
     clearAuth()
-    const msg = encodeURIComponent("Access is currently limited. Join the waitlist.")
-    window.location.href = `/waitlist?msg=${msg}`
+    redirectToWaitlist({ reason: "access_restricted", source: "auth_fetch" })
     return response
   }
   if (response.status === 401) {
