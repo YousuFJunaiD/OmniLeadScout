@@ -92,7 +92,7 @@ def create_user(email: str, full_name: str, hashed_password: str) -> Dict[str, A
         "email": email.strip().lower(),
         "full_name": full_name.strip(),
         "hashed_password": hashed_password,
-        "plan": None,
+        "plan": "starter",
         "role": "user",
     }
     resp = get_supabase().table("users").insert(payload).execute()

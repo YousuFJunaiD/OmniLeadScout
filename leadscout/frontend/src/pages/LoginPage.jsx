@@ -3,7 +3,6 @@ import { useState } from "react"
 import { Link, useNavigate } from "react-router-dom"
 import SparklesBg from "../components/SparklesBg"
 import { apiUrl, getApiHeaders } from "../lib/api"
-import { redirectToWaitlist } from "../lib/waitlist"
 
 
 
@@ -24,10 +23,6 @@ export default function LoginPage({ onLogin }) {
       })
       const data = await res.json()
       if (!res.ok) {
-        if (res.status === 403 && data.detail?.includes("Waitlist active")) {
-          redirectToWaitlist({ reason: "access_restricted", source: "login" })
-          return
-        }
         throw new Error(data.detail || "Failed")
       }
       

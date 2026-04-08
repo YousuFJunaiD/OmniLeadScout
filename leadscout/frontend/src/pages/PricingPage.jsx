@@ -3,7 +3,7 @@ import { useState } from "react"
 import { Link, useNavigate } from "react-router-dom"
 import Nav from "../components/Nav"
 import SparklesBg from "../components/SparklesBg"
-import { authFetch } from "../lib/auth"
+import { authFetch, getStoredUser, getToken } from "../lib/auth"
 
 // ── Data ──────────────────────────────────────���──────────────────────────────
 
@@ -141,6 +141,7 @@ const FAQS = [
 // ── Helpers ───────────────────────────────���───────────────────────────────────
 
 const fmt = (n) => n === null ? "Custom" : `₹${n.toLocaleString("en-IN")}`
+const DEBUG_PRICING = import.meta.env.DEV
 
 // ── Component ────────────────────────────────────────────────────────────���────
 
@@ -159,8 +160,23 @@ const loadRazorpay = () =>
     document.body.appendChild(script)
   })
 
+const getResponseMessage = async (response, fallback) => {
+  const contentType = response.headers.get("content-type") || ""
+  try {
+    if (contentType.includes("application/json")) {
+      const data = await response.json()
+      return data.detail || data.error || data.message || fallback
+    }
+    const text = await response.text()
+    return text || fallback
+  } catch {
+    return fallback
+  }
+}
+
 export default function PricingPage({ user, onPlanSelected }) {
   const nav = useNavigate()
+  const activeUser = user || getStoredUser()
   const [billing, setBilling]           = useState("monthly")
   const [selected, setSelected]         = useState(new Set())
   const [openFaq, setOpenFaq]           = useState(null)
@@ -186,15 +202,39 @@ export default function PricingPage({ user, onPlanSelected }) {
     return sum + (a ? a.price : 0)
   }, 0)
 
+  const getSelectedAddons = () => [...selected]
+
+  const getCheckoutTotal = (plan) => {
+    if (!plan || plan.monthly === null) return addonTotal
+    return price(plan) + addonTotal
+  }
+
   const handlePlanCta = async (plan) => {
     if (isSelectingPlan) return
-    if (!user) {
-      nav("/signup")
+    if (!getToken()) {
+      nav("/login")
       return
     }
     setPlanError("")
     setSelectingPlan(plan.id)
     try {
+      const selectedAddons = getSelectedAddons()
+      const frontendTotal = getCheckoutTotal(plan)
+      const paymentPayload = {
+        plan: plan.id,
+        billing,
+        addons: selectedAddons,
+      }
+      if (DEBUG_PRICING) {
+        console.debug("[pricing] checkout request", {
+          plan: plan.id,
+          selectedAddons,
+          billing,
+          frontendTotalRupees: frontendTotal,
+          frontendTotalPaise: frontendTotal * 100,
+        })
+      }
+
       if (plan.id === "enterprise") {
         setShowContact(true)
         setTimeout(() => document.getElementById("contact-section")?.scrollIntoView({ behavior: "smooth" }), 50)
@@ -211,8 +251,8 @@ export default function PricingPage({ user, onPlanSelected }) {
           },
           () => nav("/login")
         )
+        if (!res.ok) throw new Error(await getResponseMessage(res, "Failed to select plan, try again"))
         const data = await res.json()
-        if (!res.ok) throw new Error(data.detail || data.error || "Failed to select plan, try again")
         onPlanSelected?.(data.user)
         nav("/dashboard")
         return
@@ -226,12 +266,24 @@ export default function PricingPage({ user, onPlanSelected }) {
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ plan: plan.id }),
+          body: JSON.stringify(paymentPayload),
         },
         () => nav("/login")
       )
+      if (!orderRes.ok) throw new Error(await getResponseMessage(orderRes, "Failed to create payment order"))
       const orderData = await orderRes.json()
-      if (!orderRes.ok) throw new Error(orderData.detail || orderData.error || "Failed to create payment order")
+      if (DEBUG_PRICING) {
+        console.debug("[pricing] checkout response", {
+          plan: plan.id,
+          selectedAddons,
+          billing,
+          frontendTotalRupees: frontendTotal,
+          frontendTotalPaise: frontendTotal * 100,
+          backendBasePaise: orderData.base_amount,
+          backendAddonsPaise: orderData.addons_amount,
+          backendTotalPaise: orderData.amount,
+        })
+      }
 
       await new Promise((resolve, reject) => {
         const razorpay = new window.Razorpay({
@@ -253,12 +305,14 @@ export default function PricingPage({ user, onPlanSelected }) {
                     razorpay_payment_id: response.razorpay_payment_id,
                     razorpay_signature: response.razorpay_signature,
                     plan: plan.id,
+                    billing,
+                    addons: selectedAddons,
                   }),
                 },
                 () => nav("/login")
               )
+              if (!verifyRes.ok) throw new Error(await getResponseMessage(verifyRes, "Payment verification failed"))
               const verifyData = await verifyRes.json()
-              if (!verifyRes.ok) throw new Error(verifyData.detail || verifyData.error || "Payment verification failed")
               onPlanSelected?.(verifyData.user)
               nav("/dashboard")
               resolve()
@@ -267,8 +321,8 @@ export default function PricingPage({ user, onPlanSelected }) {
             }
           },
           prefill: {
-            name: user.name || "",
-            email: user.email || "",
+            name: activeUser?.name || "",
+            email: activeUser?.email || "",
           },
           theme: {
             color: "#ffffff",
@@ -280,7 +334,7 @@ export default function PricingPage({ user, onPlanSelected }) {
         razorpay.open()
       })
     } catch (error) {
-      setPlanError("Failed to select plan, try again")
+      setPlanError(error?.message || "Failed to select plan, try again")
       console.error(error)
     } finally {
       setSelectingPlan("")
@@ -332,7 +386,7 @@ export default function PricingPage({ user, onPlanSelected }) {
   return (
     <div style={S.page}>
       <SparklesBg />
-      <Nav user={user} />
+      <Nav user={activeUser} />
 
       {/* ── FOMO bar ───────────────────────────────────��─────────────────── */}
       <div style={{ ...S.fomo, paddingTop: 74 }}>

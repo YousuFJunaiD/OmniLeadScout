@@ -32,7 +32,7 @@ import logging
 from auth_utils import create_access_token, decode_access_token, hash_password_bcrypt, should_refresh_token, verify_password
 from email_utils import send_email
 from env_utils import require_env, validate_required_env
-from payment_utils import PLAN_AMOUNTS, create_razorpay_order, verify_razorpay_signature
+import payment_utils
 from supabase_db import (
     PLAN_LIMITS,
     calculate_usage,
@@ -85,6 +85,7 @@ ALLOWED_ORIGINS = sorted(
             *FRONTEND_ORIGIN.split(","),
             "https://omnimate.org",
             "https://www.omnimate.org",
+            "https://omni-lead-scout.vercel.app",
         ]
         if origin.strip()
     }
@@ -93,7 +94,7 @@ ALLOWED_ORIGINS = sorted(
 app = FastAPI(title="LeadScout API")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
+    allow_origins=["*"],
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -106,6 +107,11 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
     return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
 _job_queue = None
+
+
+def build_razorpay_receipt(user_id: str) -> str:
+    safe_user = "".join(ch for ch in str(user_id or "") if ch.isalnum()).lower()
+    return f"ord_{safe_user[:12]}_{uuid.uuid4().hex[:12]}"[:40]
 
 async def job_worker_loop(worker_id: int):
     while True:
@@ -283,22 +289,14 @@ def _validate_text_list(values: list[str], field_name: str, max_items: int = 25,
 
 
 def _public_user(user: dict) -> dict:
-    plan = user.get("plan")
+    plan = user.get("plan") or "starter"
     return {
         "id": user.get("id"),
         "name": user.get("full_name") or user.get("name") or "",
         "email": user.get("email") or "",
-        "plan": plan.lower() if isinstance(plan, str) and plan else None,
+        "plan": plan.lower() if isinstance(plan, str) and plan else "starter",
         "role": user.get("role") or "user",
     }
-
-
-ALLOWED_USERS = [
-    "youremail@gmail.com",
-    "employee1@gmail.com",
-    "employee2@gmail.com"
-]
-
 
 def create_auth_response(user: dict) -> dict:
     public_user = _public_user(user)
@@ -345,11 +343,6 @@ def get_current_user(
             logging.warning("Rate limit exceeded for user %s on %s", user_id, request.url.path)
             raise HTTPException(429, "Rate limit exceeded")
             
-    # Apply strict whitelist
-    if user.get("email") not in ALLOWED_USERS:
-        logging.warning("Unauthorized waitlist access blocked for %s", user.get("email"))
-        raise HTTPException(403, "Waitlist active")
-        
     return user
 
 
@@ -880,12 +873,6 @@ def init_db():
             role TEXT DEFAULT 'user',
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         );
-        CREATE TABLE IF NOT EXISTS waitlist (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            email TEXT UNIQUE NOT NULL,
-            approved INTEGER DEFAULT 0,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
         CREATE TABLE IF NOT EXISTS jobs (
             job_id TEXT PRIMARY KEY,
             user_id TEXT NOT NULL,
@@ -940,9 +927,6 @@ def init_db():
         conn.execute("ALTER TABLE jobs ADD COLUMN root_job_id TEXT")
     if "resumed_from_job_id" not in cols:
         conn.execute("ALTER TABLE jobs ADD COLUMN resumed_from_job_id TEXT")
-    waitlist_cols = [r[1] for r in conn.execute("PRAGMA table_info(waitlist)").fetchall()]
-    if "approved" not in waitlist_cols:
-        conn.execute("ALTER TABLE waitlist ADD COLUMN approved INTEGER DEFAULT 0")
     conn.execute("UPDATE jobs SET root_job_id=job_id WHERE root_job_id IS NULL OR root_job_id='' ")
     conn.execute("UPDATE jobs SET completed_area_indexes='[]' WHERE completed_area_indexes IS NULL OR completed_area_indexes='' ")
 
@@ -1011,6 +995,8 @@ class SelectPlanBody(BaseModel):
 
 class CreateOrderBody(BaseModel):
     plan: str
+    billing: str = "monthly"
+    addons: list[str] = []
 
     @field_validator("plan")
     @classmethod
@@ -1020,12 +1006,36 @@ class CreateOrderBody(BaseModel):
             raise ValueError("Invalid plan")
         return cleaned
 
+    @field_validator("billing")
+    @classmethod
+    def validate_billing(cls, value: str):
+        cleaned = (value or "monthly").strip().lower()
+        if cleaned not in ("monthly", "annual"):
+            raise ValueError("Invalid billing cycle")
+        return cleaned
+
+    @field_validator("addons")
+    @classmethod
+    def validate_addons(cls, value: list[str]):
+        cleaned = []
+        for addon in value or []:
+            addon_id = (addon or "").strip().lower()
+            if not addon_id:
+                continue
+            if addon_id not in payment_utils.ADDON_PRICES:
+                raise ValueError(f"Invalid add-on: {addon_id}")
+            if addon_id not in cleaned:
+                cleaned.append(addon_id)
+        return cleaned
+
 
 class VerifyPaymentBody(BaseModel):
     razorpay_order_id: str
     razorpay_payment_id: str
     razorpay_signature: str
     plan: str
+    billing: str = "monthly"
+    addons: list[str] = []
 
     @field_validator("plan")
     @classmethod
@@ -1033,6 +1043,28 @@ class VerifyPaymentBody(BaseModel):
         cleaned = (value or "").strip().lower()
         if cleaned not in ("pro", "growth"):
             raise ValueError("Invalid plan")
+        return cleaned
+
+    @field_validator("billing")
+    @classmethod
+    def validate_billing(cls, value: str):
+        cleaned = (value or "monthly").strip().lower()
+        if cleaned not in ("monthly", "annual"):
+            raise ValueError("Invalid billing cycle")
+        return cleaned
+
+    @field_validator("addons")
+    @classmethod
+    def validate_addons(cls, value: list[str]):
+        cleaned = []
+        for addon in value or []:
+            addon_id = (addon or "").strip().lower()
+            if not addon_id:
+                continue
+            if addon_id not in payment_utils.ADDON_PRICES:
+                raise ValueError(f"Invalid add-on: {addon_id}")
+            if addon_id not in cleaned:
+                cleaned.append(addon_id)
         return cleaned
 
 
@@ -1684,18 +1716,40 @@ def select_plan(body: SelectPlanBody, current_user=Depends(get_current_user)):
 @app.post("/payment/create-order")
 async def payment_create_order(body: CreateOrderBody, current_user=Depends(get_current_user)):
     try:
-        order = await create_razorpay_order(body.plan, receipt=f"{current_user['id']}_{uuid.uuid4().hex[:12]}")
-        logging.info("Payment order created for user %s plan %s amount %s", current_user["id"], body.plan, order["amount"])
+        receipt = build_razorpay_receipt(current_user["id"])
+        pricing = payment_utils.compute_payment_amount(body.plan, body.billing, body.addons)
+        logging.info(
+            "Payment create-order requested user=%s plan=%s billing=%s addons=%s backend_total_paise=%s",
+            current_user["id"],
+            pricing["plan"],
+            pricing["billing"],
+            pricing["addons"],
+            pricing["amount"],
+        )
+        order = await payment_utils.create_razorpay_order(body.plan, receipt=receipt, amount=pricing["amount"])
+        logging.info(
+            "Payment order created for user %s plan %s billing %s addons %s amount %s",
+            current_user["id"],
+            pricing["plan"],
+            pricing["billing"],
+            pricing["addons"],
+            order["amount"],
+        )
+        order["billing"] = pricing["billing"]
+        order["addons"] = pricing["addons"]
+        order["base_amount"] = pricing["base_amount"]
+        order["addons_amount"] = pricing["addons_amount"]
         return order
     except ValueError as exc:
         raise HTTPException(400, str(exc))
-    except Exception:
-        raise HTTPException(500, "Unable to create payment order")
+    except Exception as exc:
+        logging.exception("Payment order creation failed for user %s plan %s", current_user.get("id"), body.plan)
+        raise HTTPException(500, str(exc))
 
 
 @app.post("/payment/verify")
 def payment_verify(body: VerifyPaymentBody, background_tasks: BackgroundTasks, current_user=Depends(get_current_user)):
-    if not verify_razorpay_signature(
+    if not payment_utils.verify_razorpay_signature(
         body.razorpay_order_id,
         body.razorpay_payment_id,
         body.razorpay_signature,
@@ -1703,24 +1757,27 @@ def payment_verify(body: VerifyPaymentBody, background_tasks: BackgroundTasks, c
         logging.warning("Payment signature verification failed for user %s", current_user["id"])
         raise HTTPException(400, "Invalid payment signature")
 
-    amount = PLAN_AMOUNTS.get(body.plan, 0)
+    pricing = payment_utils.compute_payment_amount(body.plan, body.billing, body.addons)
     user = update_user_plan(current_user["id"], body.plan)
     _store_payment_record(
         current_user["id"],
         body.plan,
-        amount,
+        pricing["amount"],
         body.razorpay_order_id,
         body.razorpay_payment_id,
         "paid",
     )
     logging.info(
-        "Payment verified for user %s plan %s order %s payment %s",
+        "Payment verified for user %s plan %s billing %s addons %s total_paise %s order %s payment %s",
         current_user["id"],
         body.plan,
+        pricing["billing"],
+        pricing["addons"],
+        pricing["amount"],
         body.razorpay_order_id,
         body.razorpay_payment_id,
     )
-    background_tasks.add_task(_send_payment_email, user, body.plan, amount)
+    background_tasks.add_task(_send_payment_email, user, body.plan, pricing["amount"])
     return {"ok": True, "user": _public_user(user)}
 
 
@@ -2307,85 +2364,6 @@ def admin_stats(current_user=Depends(require_admin_user)):
         "top_profession": top_pro[0] if top_pro else None,
         "top_location":   top_loc[0] if top_loc else None,
         "avg_leads":      round(avg_leads) if avg_leads else 0,
-    }
-
-@app.post("/waitlist")
-async def join_waitlist(data: dict):
-    email = data.get("email")
-
-    if not email:
-        raise HTTPException(400, "Email required")
-
-    conn = get_db()
-    try:
-        conn.execute("INSERT INTO waitlist (email) VALUES (?)", (email,))
-        conn.commit()
-    except sqlite3.IntegrityError:
-        conn.close()
-        return {"ok": False, "message": "Already joined"}
-    finally:
-        conn.close()
-
-    print("Saved to DB:", email)
-
-    return {"ok": True}
-
-@app.get("/waitlist/all")
-async def get_waitlist():
-    conn = get_db()
-    rows = conn.execute(
-        "SELECT email, created_at, COALESCE(approved, 0) AS approved FROM waitlist ORDER BY created_at DESC"
-    ).fetchall()
-    conn.close()
-
-    data = [
-        {"email": r["email"], "created_at": r["created_at"], "approved": int(r["approved"] or 0)}
-        for r in rows
-    ]
-    if not data:
-        return []
-    if isinstance(data, dict):
-        return [data]
-    return data
-
-@app.get("/waitlist/check")
-async def check_waitlist(email: str = Query(...)):
-    normalized_email = email.strip().lower()
-    conn = get_db()
-    row = conn.execute(
-        "SELECT email, created_at, COALESCE(approved, 0) AS approved FROM waitlist WHERE email = ?",
-        (normalized_email,),
-    ).fetchone()
-    conn.close()
-    if not row:
-        return {"access": False}
-    return {
-        "access": bool(row["approved"]),
-    }
-
-@app.post("/waitlist/approve")
-async def approve_waitlist(data: dict):
-    email = (data.get("email") or "").strip().lower()
-    if not email:
-        raise HTTPException(400, "Email required")
-
-    conn = get_db()
-    cursor = conn.execute("UPDATE waitlist SET approved = 1 WHERE email = ?", (email,))
-    conn.commit()
-    row = conn.execute(
-        "SELECT email, created_at, COALESCE(approved, 0) AS approved FROM waitlist WHERE email = ?",
-        (email,),
-    ).fetchone()
-    conn.close()
-
-    if cursor.rowcount == 0 or not row:
-        raise HTTPException(404, "Waitlist entry not found")
-
-    return {
-        "ok": True,
-        "email": row["email"],
-        "created_at": row["created_at"],
-        "approved": int(row["approved"] or 0),
     }
 
 @app.get("/health")
