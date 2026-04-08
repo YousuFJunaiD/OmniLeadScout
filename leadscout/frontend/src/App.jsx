@@ -103,7 +103,6 @@ export default function App() {
         <Route path="/dashboard" element={protectedArea(<DashboardPage user={user} onLogout={logout} />)} />
         <Route path="/leads" element={protectedArea(<LeadsPage user={user} onLogout={logout} />)} />
         <Route path="/profile"  element={protectedArea(<ProfilePage user={user} onLogout={logout} />)} />
-        <Route path="/waitlist" element={<Navigate to={user ? "/dashboard" : "/login"} replace />} />
         <Route path="/admin"    element={<AdminPage user={user} onLogout={logout} />} />
       </Routes>
     </Router>

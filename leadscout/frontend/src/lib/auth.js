@@ -1,4 +1,3 @@
-import { redirectToWaitlist } from "./waitlist"
 import { apiUrl, getApiHeaders } from "./api"
 
 const TOKEN_KEY = "ls_token"
@@ -89,11 +88,6 @@ export async function tryRefreshToken() {
 export async function authFetch(url, options = {}, onUnauthorized) {
   const headers = getAuthHeaders(options.headers || {})
   const response = await fetch(apiUrl(url), { ...options, headers })
-  if (response.status === 403) {
-    clearAuth()
-    redirectToWaitlist({ reason: "access_restricted", source: "auth_fetch" })
-    return response
-  }
   if (response.status === 401) {
     clearAuth()
     if (onUnauthorized) onUnauthorized()
