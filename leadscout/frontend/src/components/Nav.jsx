@@ -4,7 +4,7 @@ import { Link, useLocation } from "react-router-dom"
 export default function Nav({ user, onLogout }) {
   const loc = useLocation()
   const isGuest = !user || user.id === "guest"
-  const plan = user?.plan ? user.plan.toUpperCase() : "CHOOSE PLAN"
+  const plan = user?.plan ? user.plan.toUpperCase() : "STARTER"
 
   return (
     <nav className="nav">

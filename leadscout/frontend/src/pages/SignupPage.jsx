@@ -3,7 +3,6 @@ import { useState } from "react"
 import { Link, useNavigate } from "react-router-dom"
 import SparklesBg from "../components/SparklesBg"
 import { apiUrl, getApiHeaders } from "../lib/api"
-import { redirectToWaitlist } from "../lib/waitlist"
 
 
 
@@ -27,13 +26,9 @@ export default function SignupPage({ onLogin }) {
         body: JSON.stringify(form),
       })
       const data = await res.json()
-      if (res.status === 403 && data.detail?.includes("Waitlist active")) {
-        redirectToWaitlist({ reason: "access_restricted", source: "signup" })
-        return
-      }
       if (!res.ok) throw new Error(data.detail || "Registration failed")
       onLogin(data)
-      nav("/pricing")
+      nav("/dashboard")
     } catch (e) { setError(e.message) }
     setLoading(false)
   }
