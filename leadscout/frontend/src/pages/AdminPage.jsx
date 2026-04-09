@@ -11,9 +11,12 @@ export default function AdminPage({ user, onLogout }) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState("")
 
+  const normalizedRole = String(user?.role || "").trim().toLowerCase()
+
   useEffect(() => {
     if (!user) return
-    if ((user.role || "user").toLowerCase() !== "admin") {
+    console.debug("[AdminPage] role check", { rawRole: user?.role, normalizedRole })
+    if (normalizedRole !== "admin") {
       setLoading(false)
       return
     }
@@ -39,9 +42,9 @@ export default function AdminPage({ user, onLogout }) {
     return () => {
       active = false
     }
-  }, [navigate, user])
+  }, [navigate, normalizedRole, user])
 
-  const isAdmin = (user?.role || "user").toLowerCase() === "admin"
+  const isAdmin = normalizedRole === "admin"
 
   return (
     <div className="page">
@@ -56,6 +59,9 @@ export default function AdminPage({ user, onLogout }) {
               <p style={{ color: "var(--text-secondary)", lineHeight: 1.7, marginBottom: 18 }}>
                 This page is now protected by your backend user role, not frontend email allowlists.
               </p>
+              <p style={{ color: "var(--text-muted)", fontSize: 12, marginBottom: 18 }}>
+                Current role: {user?.role || "missing"}
+              </p>
               <Link to="/dashboard" className="btn btn-ghost">Back to dashboard</Link>
             </div>
           ) : (
@@ -64,6 +70,9 @@ export default function AdminPage({ user, onLogout }) {
               <h1 style={{ fontSize: 28, fontWeight: 800, letterSpacing: "-0.02em", marginBottom: 8 }}>LeadScout admin</h1>
               <p style={{ color: "var(--text-secondary)", lineHeight: 1.7, marginBottom: 24 }}>
                 Backend-backed admin access is enabled for your account role. This panel reflects the current users table from the API.
+              </p>
+              <p style={{ color: "var(--text-muted)", fontSize: 12, marginBottom: 24 }}>
+                Current role: {user?.role || "missing"}
               </p>
 
               {loading ? (

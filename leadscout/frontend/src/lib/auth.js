@@ -55,7 +55,7 @@ export function setStoredUser(user) {
       id: user.id, 
       email: String(user.email || "").trim().toLowerCase(),
       name: user.name || user.full_name, 
-      role: user.role, 
+      role: String(user.role || "user").trim().toLowerCase(),
       plan: user.plan 
     }
     getStorage()?.setItem(USER_KEY, JSON.stringify(safeUser))

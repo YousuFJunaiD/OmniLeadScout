@@ -17,7 +17,7 @@ import uuid
 import hashlib
 import sqlite3
 from datetime import datetime, timedelta
-from functools import lru_cache
+# from functools import lru_cache
 from pathlib import Path
 from typing import Optional
 
@@ -310,6 +310,12 @@ def _public_user(user: dict) -> dict:
 
 def create_auth_response(user: dict) -> dict:
     public_user = _public_user(user)
+    logging.info(
+        "Auth response user_id=%s email=%s role=%s",
+        public_user["id"],
+        public_user["email"],
+        public_user["role"],
+    )
     token = create_access_token(
         {
             "sub": public_user["id"],
@@ -321,10 +327,15 @@ def create_auth_response(user: dict) -> dict:
     return {"token": token, "user": public_user}
 
 
-@lru_cache(maxsize=1000)
 def get_cached_user(user_id: str):
     user = get_user_by_id(user_id)
     if user:
+        logging.info(
+            "Auth lookup user_id=%s email=%s db_role=%s",
+            user.get("id"),
+            user.get("email"),
+            user.get("role") or "user",
+        )
         return {k: v for k, v in user.items() if k not in ["hashed_password", "password_hash", "token", "access_token"]}
     return None
 
@@ -348,6 +359,12 @@ def get_current_user(
     if not user:
         logging.warning("Auth failed: unknown user %s for %s", user_id, request.url.path)
         raise HTTPException(401, "User not found")
+    logging.info(
+        "Auth current user path=%s user_id=%s role=%s",
+        request.url.path,
+        user.get("id"),
+        user.get("role") or "user",
+    )
     if request.url.path.startswith("/scrape") or request.url.path.startswith("/user") or request.url.path.startswith("/admin"):
         if not _enforce_rate_limit(user_request_log, user_id, RATE_LIMIT_REQUESTS, RATE_LIMIT_WINDOW_SECONDS):
             logging.warning("Rate limit exceeded for user %s on %s", user_id, request.url.path)
@@ -1670,6 +1687,7 @@ def register(body: RegisterBody, request: Request, background_tasks: BackgroundT
         full_name=body.name,
         hashed_password=hash_password_bcrypt(body.password),
     )
+    logging.info("Register created email=%s role=%s", user.get("email"), user.get("role") or "user")
     background_tasks.add_task(_send_welcome_email, user)
     return create_auth_response(user)
 
@@ -1686,6 +1704,12 @@ def login(body: LoginBody, request: Request):
         logging.warning("Auth rate limit exceeded on login for %s", body.email)
         raise HTTPException(429, "Too many authentication attempts")
     user = get_user_by_email(body.email)
+    logging.info(
+        "Login lookup email=%s found=%s db_role=%s",
+        body.email.strip().lower(),
+        bool(user),
+        (user or {}).get("role") or "missing",
+    )
     if not user or not verify_password(body.password, user.get("hashed_password", "")):
         logging.warning("Login failed for email %s", body.email)
         raise HTTPException(401, "Invalid email or password")
@@ -1694,6 +1718,12 @@ def login(body: LoginBody, request: Request):
 
 @app.get("/auth/me")
 def auth_me(current_user=Depends(get_current_user)):
+    logging.info(
+        "Auth me response user_id=%s email=%s role=%s",
+        current_user.get("id"),
+        current_user.get("email"),
+        current_user.get("role") or "user",
+    )
     return {"user": _public_user(current_user)}
 
 

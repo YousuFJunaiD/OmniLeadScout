@@ -72,7 +72,11 @@ export default function App() {
     const interval = setInterval(() => {
       tryRefreshToken()
         .then((data) => {
-          if (data?.user) setUser(data.user)
+          if (data?.user) {
+            setStoredUser(data.user)
+            setUser(data.user)
+            syncAdminEmail(data.user?.email || "")
+          }
         })
         .catch(() => {})
     }, 5 * 60 * 1000)
