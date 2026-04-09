@@ -130,6 +130,12 @@ async def job_worker_loop(worker_id: int):
                     continue
                     
                 job["status"] = "running"
+                job["progress_message"] = "Worker started"
+                try:
+                    update_job_db(job_id, "running", job.get("lead_count", 0))
+                    update_scrape_job(job_id, status="running", leads_found=int(job.get("lead_count", 0)))
+                except Exception as sync_exc:
+                    logging.warning("Failed to mark job %s as running: %s", job_id, sync_exc)
                 try:
                     if job_type == "v2":
                         await asyncio.wait_for(run_job_v2(job_id), timeout=300)
@@ -574,6 +580,17 @@ def publish_event(job: dict, message: dict):
 
     if message.get("type") == "lead":
         job["lead_count"] = int(job.get("lead_count", 0)) + 1
+        job["progress_message"] = f"Saved {job['lead_count']} leads"
+    elif message.get("type") == "progress":
+        data = message.get("data") or {}
+        job["current_query"] = str(data.get("query") or job.get("current_query") or "")
+        job["progress_message"] = f"{int(data.get('current', 0))}/{int(data.get('total', 0))} steps • {job['current_query']}".strip()
+    elif message.get("type") in ("info", "error", "block_wait"):
+        data = message.get("data") or ""
+        if isinstance(data, dict):
+          job["progress_message"] = str(data.get("reason") or data.get("query") or data)
+        else:
+          job["progress_message"] = str(data)
 
     dead_listeners = []
     for q in list(job.get("listeners", set())):
@@ -790,6 +807,15 @@ async def run_job(job_id: str):
         save_seen_leads(seen)
 
         final_status = resolve_final_job_status(job.get("cancelled"), accepted_leads)
+        logging.info(
+            "Scrape V1 finished user=%s job=%s status=%s saved_leads=%s processed_areas=%s/%s",
+            user_id,
+            job_id,
+            final_status,
+            accepted_leads,
+            job.get("processed_areas", 0),
+            total,
+        )
 
         generated = generate_job_csv_from_db(job_id, niche)
         # Keep a rolling combined export per niche so users can always fetch one complete file.
@@ -1469,6 +1495,15 @@ async def run_job_v2(job_id: str):
             pass
 
         final_status = resolve_final_job_status(job.get("cancelled"), accepted_leads)
+        logging.info(
+            "Scrape V2 finished user=%s job=%s status=%s saved_leads=%s city=%s queries=%s",
+            user_id,
+            job_id,
+            final_status,
+            accepted_leads,
+            city,
+            queries,
+        )
         update_job_db(job_id, final_status, accepted_leads, csv_path)
         try:
             update_scrape_job(job_id, status=final_status, leads_found=accepted_leads)
@@ -1512,6 +1547,15 @@ async def start_scrape_v2(body: ScrapeV2Body, background_tasks: BackgroundTasks,
         "justdial": body.enable_justdial,
         "indiamart": body.enable_indiamart,
     }
+    logging.info(
+        "Scrape V2 request user=%s city=%s queries=%s platforms=%s website_filter=%s max_per_query=%s",
+        user_id,
+        body.city,
+        body.queries,
+        requested_platforms,
+        body.website_filter,
+        body.max_per_query,
+    )
     usage = None
     try:
         usage = calculate_usage(user_id)
@@ -1594,6 +1638,7 @@ async def start_scrape_v2(body: ScrapeV2Body, background_tasks: BackgroundTasks,
         "listeners":       set(),
         "finished_at":     None,
         "current_query":   "",
+        "progress_message": "Queued for worker",
     }
     try:
         _job_queue.put_nowait((job_id, "v2"))
@@ -2013,6 +2058,7 @@ def scrape_status(job_id: str, current_user=Depends(get_current_user)):
         job = active_jobs[job_id]
         if job.get("user_id") != current_user["id"]:
             raise HTTPException(403, "Access denied")
+        recent_events = list(job.get("events", []))[-20:]
         return {
             "job_id": job_id,
             "status": job.get("status", "running"),
@@ -2020,6 +2066,8 @@ def scrape_status(job_id: str, current_user=Depends(get_current_user)):
             "processed_areas": int(job.get("processed_areas", 0)),
             "total_areas": int(job.get("total_areas", 0)),
             "current_query": job.get("current_query", ""),
+            "progress_message": job.get("progress_message", ""),
+            "recent_events": recent_events,
             "running": job.get("status") in ("running", "stopping"),
             "profession": job.get("profession", ""),
             "location": job.get("location", ""),
@@ -2052,6 +2100,8 @@ def scrape_status(job_id: str, current_user=Depends(get_current_user)):
         "processed_areas": row["processed_areas"] or 0,
         "total_areas": row["total_areas"] or 0,
         "current_query": "",
+        "progress_message": "Job finished" if status in ("completed", "stopped", "failed", "no_results") else "Waiting for worker",
+        "recent_events": [],
         "running": False,
         "csv_path": row["csv_path"],
         "profession": row["profession"] or "",

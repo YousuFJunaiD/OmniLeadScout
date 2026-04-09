@@ -8,6 +8,7 @@ import { authFetch } from "../lib/auth"
 const WS_BASE = `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}/api`
 const LIVE_FEED_MAX_ROWS = 200
 const LIVE_FEED_FLUSH_MS = 700
+const STATUS_POLL_MS = 1500
 
 // ── Complete World Database ─────────────────────────────
 const WORLD = {
@@ -469,6 +470,7 @@ export default function DashboardPage({ user, onLogout }) {
   const [showHistory, setShowHistory] = useState(false)
   const [runtimeStatus, setRuntimeStatus] = useState("")
   const [runtimeErrorDetails, setRuntimeErrorDetails] = useState(null)
+  const [feedMessages, setFeedMessages] = useState([])
 
   // ── v2 multi-platform config ──────────────────────────────
   const [queries, setQueries]           = useState(["dentist"])
@@ -490,13 +492,17 @@ export default function DashboardPage({ user, onLogout }) {
   const pendingStatsRef = useRef({ total: 0, withOwner: 0, withEmail: 0, withWebsite: 0 })
   const flushTimerRef = useRef(null)
   const heartbeatRef = useRef(null)
+  const statusPollRef = useRef(null)
   const retryCountRef = useRef(0)
   const seenLeadKeysRef = useRef(new Set())
+  const seenMessageKeysRef = useRef(new Set())
 
   const resetLiveBuffers = () => {
     pendingLeadsRef.current = []
     pendingStatsRef.current = { total: 0, withOwner: 0, withEmail: 0, withWebsite: 0 }
     seenLeadKeysRef.current = new Set()
+    seenMessageKeysRef.current = new Set()
+    setFeedMessages([])
     if (flushTimerRef.current) {
       clearTimeout(flushTimerRef.current)
       flushTimerRef.current = null
@@ -520,6 +526,51 @@ export default function DashboardPage({ user, onLogout }) {
     if (status === "running") return "badge-cyan"
     if (status === "stopping" || status === "stopped" || status === "no_results") return "badge-gold"
     return "badge-red"
+  }
+
+  const pushFeedMessage = (text, tone = "info") => {
+    const message = String(text || "").trim()
+    if (!message) return
+    const key = `${tone}:${message}`
+    if (seenMessageKeysRef.current.has(key)) return
+    seenMessageKeysRef.current.add(key)
+    setFeedMessages((prev) => [{ id: `${Date.now()}-${prev.length}`, text: message, tone }, ...prev].slice(0, 18))
+  }
+
+  const applyStatusSnapshot = (status) => {
+    if (!status) return
+    setProgress((prev) => ({
+      current: Number(status.processed_areas ?? prev.current ?? 0),
+      total: Number(status.total_areas ?? prev.total ?? 0),
+      query: status.current_query || prev.query || "",
+    }))
+    setRuntimeStatus(
+      status.progress_message ||
+      status.current_query ||
+      (status.status === "pending" ? "Queued for worker…" : status.status)
+    )
+    if (typeof status.lead_count === "number") {
+      setStats((prev) => ({
+        ...prev,
+        total: Math.max(prev.total, Number(status.lead_count || 0)),
+      }))
+    }
+    for (const event of status.recent_events || []) {
+      const type = event?.type || "info"
+      if (type === "lead" && event?.data) {
+        queueLeadForUi(event.data)
+      } else if (type === "progress") {
+        const data = event.data || {}
+        pushFeedMessage(`Progress ${data.current || 0}/${data.total || 0}${data.query ? ` • ${data.query}` : ""}`)
+      } else if (type === "error") {
+        pushFeedMessage(event.data || "Scrape failed", "error")
+      } else if (type === "block_wait") {
+        const data = event.data || {}
+        pushFeedMessage(`Blocked, retrying in ${data.wait_seconds || 0}s`, "warn")
+      } else {
+        pushFeedMessage(event?.data || type)
+      }
+    }
   }
 
   const flushLiveFeed = () => {
@@ -682,6 +733,7 @@ export default function DashboardPage({ user, onLogout }) {
     setRuntimeStatus("")
     setStats({ total: 0, withOwner: 0, withEmail: 0, withWebsite: 0 })
     setProgress({ current: 0, total: 0, query: restartFromBeginning ? "Restarting..." : "Resuming..." })
+    pushFeedMessage(restartFromBeginning ? "Restarting stopped scrape…" : "Reconnecting to stopped scrape…")
     setScraping(true)
 
     try {
@@ -751,8 +803,10 @@ export default function DashboardPage({ user, onLogout }) {
         setLiveUrl(msg.data || { maps_url: "", website_url: "", name: "" })
       } else if (msg.type === "progress") {
         setProgress(msg.data)
+        pushFeedMessage(`Progress ${msg.data?.current || 0}/${msg.data?.total || 0}${msg.data?.query ? ` • ${msg.data.query}` : ""}`)
       } else if (msg.type === "info") {
         setRuntimeStatus(String(msg.data || ""))
+        pushFeedMessage(String(msg.data || ""))
       } else if (msg.type === "proxy_stats") {
         setProxyStats(msg.data || null)
       } else if (msg.type === "block_wait") {
@@ -761,6 +815,7 @@ export default function DashboardPage({ user, onLogout }) {
         const attempt = Number(d.retry_attempt || 0)
         const limit = Number(d.retry_limit || 0)
         setRuntimeStatus(`Blocked by Google. Waiting ${wait}s (attempt ${attempt}/${limit}) then auto-resuming...`)
+        pushFeedMessage(`Blocked by Google. Waiting ${wait}s (attempt ${attempt}/${limit})`, "warn")
       } else if (msg.type === "done") {
         flushLiveFeed()
         keepSocketAliveRef.current = false
@@ -777,11 +832,13 @@ export default function DashboardPage({ user, onLogout }) {
         refreshResumeCandidate()
         refreshHistory()
         refreshUsage()
+        pushFeedMessage(msg.data?.status === "no_results" ? "Finished with no saved leads." : "Scrape finished.")
       } else if (msg.type === "error") {
         flushLiveFeed()
         keepSocketAliveRef.current = false
         setScraping(false)
         setRuntimeStatus(String(msg.data || "Stopped with an error"))
+        pushFeedMessage(String(msg.data || "Stopped with an error"), "error")
         clearActiveJob()
         refreshHistory()
         refreshUsage()
@@ -871,7 +928,9 @@ export default function DashboardPage({ user, onLogout }) {
     setRuntimeStatus("")
     setRuntimeErrorDetails(null)
     setStats({ total: 0, withOwner: 0, withEmail: 0, withWebsite: 0 })
-    setProgress({ current: 0, total: finalQueries.length, query: "" })
+    setProgress({ current: 0, total: finalQueries.length * Object.values(requestedPlatforms).filter(Boolean).length, query: "" })
+    pushFeedMessage("Launching scrape…")
+    setRuntimeStatus("Queueing scrape…")
     try {
       const res = await authRequest(`/scrape/v2/start`, {
         method: "POST",
@@ -911,10 +970,12 @@ export default function DashboardPage({ user, onLogout }) {
       setJobId(data.job_id)
       localStorage.setItem(ACTIVE_JOB_KEY, data.job_id)
       attachSocket(data.job_id, { reset: true })
+      pushFeedMessage(`Scrape job ${data.job_id.slice(0, 8)} queued.`)
     } catch (error) {
       setScraping(false)
       setRuntimeErrorDetails(null)
       setRuntimeStatus(toReadableError(error?.message, "Unable to start scrape"))
+      pushFeedMessage(toReadableError(error?.message, "Unable to start scrape"), "error")
     }
   }
 
@@ -992,6 +1053,7 @@ export default function DashboardPage({ user, onLogout }) {
       .then(r => r.json())
       .then(status => {
         if (!mounted) return
+        applyStatusSnapshot(status)
         if (status?.running) {
           setScraping(true)
           if (status.profession) {
@@ -1098,6 +1160,40 @@ export default function DashboardPage({ user, onLogout }) {
     }
     return () => { if (heartbeatRef.current) clearInterval(heartbeatRef.current) }
   }, [scraping, jobId])
+
+  useEffect(() => {
+    if (!jobId) return
+    const poll = async () => {
+      try {
+        const res = await authRequest(`/scrape/status/${jobId}`)
+        if (!res.ok) return
+        const status = await res.json()
+        applyStatusSnapshot(status)
+        if (!status.running) {
+          if (statusPollRef.current) {
+            clearInterval(statusPollRef.current)
+            statusPollRef.current = null
+          }
+          keepSocketAliveRef.current = false
+          setScraping(false)
+          setCanDownload((status.lead_count || 0) > 0)
+          if (!["completed", "stopped", "failed", "no_results"].includes(status.status)) {
+            setRuntimeStatus(status.progress_message || "Job finished.")
+          }
+          clearActiveJob()
+          refreshHistory()
+          refreshUsage()
+        }
+      } catch {
+        pushFeedMessage("Live status polling failed. Retrying…", "warn")
+      }
+    }
+    poll()
+    statusPollRef.current = setInterval(poll, STATUS_POLL_MS)
+    return () => {
+      if (statusPollRef.current) clearInterval(statusPollRef.current)
+    }
+  }, [jobId])
 
   const chipStyle = (selected) => ({
     padding: "4px 10px", fontSize: 11, borderRadius: 100, cursor: "pointer",
@@ -1446,7 +1542,23 @@ export default function DashboardPage({ user, onLogout }) {
                   {stats.total > 0 && <span style={{ fontSize: 11, color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>{stats.total} collected</span>}
                 </div>
                 <div ref={tableRef} style={{ maxHeight: 480, overflowY: "auto" }}>
-                  {leads.length === 0 ? (
+                  {leads.length === 0 && feedMessages.length > 0 ? (
+                    <div style={{ padding: "18px 20px", display: "flex", flexDirection: "column", gap: 10 }}>
+                      {feedMessages.map((message) => (
+                        <div
+                          key={message.id}
+                          style={{
+                            fontSize: 12,
+                            color: message.tone === "error" ? "var(--accent-red)" : message.tone === "warn" ? "var(--accent-gold)" : "var(--text-secondary)",
+                            borderBottom: "1px solid var(--border)",
+                            paddingBottom: 10,
+                          }}
+                        >
+                          {message.text}
+                        </div>
+                      ))}
+                    </div>
+                  ) : leads.length === 0 ? (
                     <div style={{ padding: "60px 20px", textAlign: "center" }}>
                       <div style={{ fontSize: 40, opacity: 0.15, marginBottom: 12 }}>◈</div>
                       <p style={{ color: "var(--text-muted)", fontSize: 13 }}>

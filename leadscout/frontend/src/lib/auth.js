@@ -5,7 +5,15 @@ const USER_KEY = "ls_user"
 
 function getStorage() {
   if (typeof window === "undefined") return null
-  return window.sessionStorage
+  const local = window.localStorage
+  const session = window.sessionStorage
+  if (!local.getItem(TOKEN_KEY) && session.getItem(TOKEN_KEY)) {
+    local.setItem(TOKEN_KEY, session.getItem(TOKEN_KEY))
+  }
+  if (!local.getItem(USER_KEY) && session.getItem(USER_KEY)) {
+    local.setItem(USER_KEY, session.getItem(USER_KEY))
+  }
+  return local
 }
 
 export function getToken() {
@@ -18,6 +26,9 @@ export function setToken(token) {
 
 export function clearToken() {
   getStorage()?.removeItem(TOKEN_KEY)
+  if (typeof window !== "undefined") {
+    window.sessionStorage.removeItem(TOKEN_KEY)
+  }
 }
 
 export function getAuthHeaders(extra = {}) {
@@ -48,6 +59,9 @@ export function setStoredUser(user) {
       plan: user.plan 
     }
     getStorage()?.setItem(USER_KEY, JSON.stringify(safeUser))
+    if (typeof window !== "undefined") {
+      window.sessionStorage.setItem(USER_KEY, JSON.stringify(safeUser))
+    }
   }
 }
 
@@ -55,6 +69,7 @@ export function clearAuth() {
   clearToken()
   getStorage()?.removeItem(USER_KEY)
   if (typeof window !== "undefined") {
+    window.sessionStorage.removeItem(USER_KEY)
     window.localStorage.removeItem("user_email")
     Object.keys(window.localStorage).forEach((key) => {
       if (key.startsWith("ls_active_job_")) {

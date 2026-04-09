@@ -1,116 +1,105 @@
 import React from "react";
-import { useEffect, useMemo, useState } from "react"
-import { Link } from "react-router-dom"
+import { useEffect, useState } from "react"
+import { Link, useNavigate } from "react-router-dom"
 import Nav from "../components/Nav"
 import SparklesBg from "../components/SparklesBg"
-import { supabase } from "../lib/supabase"
-
-const ADMIN_EMAILS = (import.meta.env.VITE_ADMIN_EMAILS || "")
-  .split(",")
-  .map((email) => email.trim().toLowerCase())
-  .filter(Boolean)
+import { authFetch } from "../lib/auth"
 
 export default function AdminPage({ user, onLogout }) {
-  const [currentEmail, setCurrentEmail] = useState("")
+  const navigate = useNavigate()
+  const [users, setUsers] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState("")
 
   useEffect(() => {
-    if (typeof window === "undefined") return
-
-    let mounted = true
-    const fallbackEmail = (window.localStorage.getItem("user_email") || user?.email || "").trim().toLowerCase()
-
-    if (!supabase) {
-      setCurrentEmail(fallbackEmail)
+    if (!user) return
+    if ((user.role || "user").toLowerCase() !== "admin") {
+      setLoading(false)
       return
     }
 
-    supabase.auth.getSession().then(({ data }) => {
-      if (!mounted) return
-      const sessionEmail = data.session?.user?.email?.trim().toLowerCase() || fallbackEmail
-      setCurrentEmail(sessionEmail)
-    })
-
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
-      const sessionEmail = session?.user?.email?.trim().toLowerCase() || fallbackEmail
-      setCurrentEmail(sessionEmail)
-    })
+    let active = true
+    authFetch("/admin/users", {}, () => navigate("/login"))
+      .then(async (res) => {
+        const data = await res.json().catch(() => ({}))
+        if (!active) return
+        if (!res.ok) {
+          throw new Error(data?.detail || "Unable to load admin users")
+        }
+        setUsers(data.users || [])
+        setError("")
+      })
+      .catch((err) => {
+        if (active) setError(String(err?.message || "Unable to load admin users"))
+      })
+      .finally(() => {
+        if (active) setLoading(false)
+      })
 
     return () => {
-      mounted = false
-      listener.subscription.unsubscribe()
+      active = false
     }
-  }, [user?.email])
+  }, [navigate, user])
 
-  const isAllowed = useMemo(() => {
-    return Boolean(currentEmail) && ADMIN_EMAILS.includes(currentEmail)
-  }, [currentEmail])
-
-  if (!currentEmail) {
-    return (
-      <div className="page">
-        <SparklesBg />
-        <Nav user={user} onLogout={onLogout} />
-        <div style={{ paddingTop: 64, minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: "96px 24px 40px" }}>
-          <div className="card" style={{ maxWidth: 520, width: "100%", textAlign: "center" }}>
-            <span className="badge badge-red" style={{ marginBottom: 12, display: "inline-block" }}>Admin Only</span>
-            <h1 style={{ fontSize: 28, fontWeight: 800, letterSpacing: "-0.02em", marginBottom: 12 }}>Admin email missing</h1>
-            <p style={{ color: "var(--text-secondary)", lineHeight: 1.7 }}>
-              Sign in first, or set <code>localStorage.getItem("user_email")</code> to an allowed admin email.
-            </p>
-          </div>
-        </div>
-      </div>
-    )
-  }
-
-  if (!isAllowed) {
-    return (
-      <div className="page">
-        <SparklesBg />
-        <Nav user={user} onLogout={onLogout} />
-        <div style={{ paddingTop: 64, minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: "96px 24px 40px" }}>
-          <div className="card" style={{ maxWidth: 560, width: "100%", textAlign: "center" }}>
-            <span className="badge badge-red" style={{ marginBottom: 12, display: "inline-block" }}>Access Denied</span>
-            <h1 style={{ fontSize: 28, fontWeight: 800, letterSpacing: "-0.02em", marginBottom: 12 }}>You do not have admin access</h1>
-            <p style={{ color: "var(--text-secondary)", lineHeight: 1.7, marginBottom: 18 }}>
-              Signed in as <strong style={{ color: "var(--text-primary)" }}>{currentEmail}</strong>. Ask the founder to add this email to <code>VITE_ADMIN_EMAILS</code>.
-            </p>
-            <Link to="/dashboard" className="btn btn-ghost">Back to dashboard</Link>
-          </div>
-        </div>
-      </div>
-    )
-  }
+  const isAdmin = (user?.role || "user").toLowerCase() === "admin"
 
   return (
     <div className="page">
       <SparklesBg />
       <Nav user={user} onLogout={onLogout} />
       <div style={{ paddingTop: 64 }}>
-        <div style={{ maxWidth: 920, margin: "0 auto", padding: "40px 24px 80px" }}>
-          <div className="card anim-fade-up">
-            <span className="badge badge-cyan" style={{ marginBottom: 12, display: "inline-block" }}>Admin</span>
-            <h1 style={{ fontSize: 28, fontWeight: 800, letterSpacing: "-0.02em", marginBottom: 8 }}>LeadScout admin</h1>
-            <p style={{ color: "var(--text-secondary)", lineHeight: 1.7, marginBottom: 24 }}>
-              Admin access is still restricted by <code>VITE_ADMIN_EMAILS</code>, and you can manage users from the backend or Supabase directly while broader admin tools are rebuilt.
-            </p>
-
-            <div className="admin-kpi-grid" style={{ marginBottom: 24 }}>
-              <div className="card" style={{ padding: "16px 20px" }}>
-                <div style={{ fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 6 }}>Signed In As</div>
-                <div style={{ fontSize: 16, fontWeight: 700, color: "var(--text-primary)" }}>{currentEmail}</div>
-              </div>
-              <div className="card" style={{ padding: "16px 20px" }}>
-                <div style={{ fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 6 }}>App Access</div>
-                <div style={{ fontSize: 16, fontWeight: 700, color: "var(--text-primary)" }}>Open signup and login</div>
-              </div>
+        <div style={{ maxWidth: 1080, margin: "0 auto", padding: "40px 24px 80px" }}>
+          {!isAdmin ? (
+            <div className="card" style={{ textAlign: "center" }}>
+              <span className="badge badge-red" style={{ marginBottom: 12, display: "inline-block" }}>Access Denied</span>
+              <h1 style={{ fontSize: 28, fontWeight: 800, letterSpacing: "-0.02em", marginBottom: 12 }}>Admin role required</h1>
+              <p style={{ color: "var(--text-secondary)", lineHeight: 1.7, marginBottom: 18 }}>
+                This page is now protected by your backend user role, not frontend email allowlists.
+              </p>
+              <Link to="/dashboard" className="btn btn-ghost">Back to dashboard</Link>
             </div>
+          ) : (
+            <div className="card anim-fade-up">
+              <span className="badge badge-cyan" style={{ marginBottom: 12, display: "inline-block" }}>Admin</span>
+              <h1 style={{ fontSize: 28, fontWeight: 800, letterSpacing: "-0.02em", marginBottom: 8 }}>LeadScout admin</h1>
+              <p style={{ color: "var(--text-secondary)", lineHeight: 1.7, marginBottom: 24 }}>
+                Backend-backed admin access is enabled for your account role. This panel reflects the current users table from the API.
+              </p>
 
-            <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-              <Link to="/dashboard" className="btn btn-primary">Open dashboard</Link>
-              <Link to="/pricing" className="btn btn-ghost">Open pricing</Link>
+              {loading ? (
+                <div style={{ color: "var(--text-muted)" }}>Loading users…</div>
+              ) : error ? (
+                <div style={{ color: "var(--accent-red)" }}>{error}</div>
+              ) : (
+                <div className="table-wrap">
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        <th>Name</th>
+                        <th>Email</th>
+                        <th>Plan</th>
+                        <th>Role</th>
+                        <th>Jobs</th>
+                        <th>Total Leads</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {users.map((row) => (
+                        <tr key={row.id}>
+                          <td>{row.name || "—"}</td>
+                          <td>{row.email || "—"}</td>
+                          <td>{row.plan || "starter"}</td>
+                          <td><span className={`badge ${row.role === "admin" ? "badge-cyan" : "badge-gold"}`}>{row.role || "user"}</span></td>
+                          <td>{row.job_count || 0}</td>
+                          <td>{row.total_leads || 0}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
-          </div>
+          )}
         </div>
       </div>
     </div>

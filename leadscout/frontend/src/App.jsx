@@ -15,6 +15,7 @@ import { apiUrl, getApiHeaders } from "./lib/api"
 
 export default function App() {
   const [user, setUser] = useState(null)
+  const [authReady, setAuthReady] = useState(false)
 
   const syncAdminEmail = (email) => {
     if (typeof window === "undefined") return
@@ -28,17 +29,22 @@ export default function App() {
   useEffect(() => {
     const token = getToken()
     const storedUser = getStoredUser()
-    if (!token && !storedUser) return
+    if (!token && !storedUser) {
+      setAuthReady(true)
+      return
+    }
     if (!token || !storedUser) {
       clearAuth()
       setUser(null)
       syncAdminEmail("")
+      setAuthReady(true)
       return
     }
     if (isTokenExpired(token)) {
       clearAuth()
       setUser(null)
       syncAdminEmail("")
+      setAuthReady(true)
       return
     }
 
@@ -51,11 +57,13 @@ export default function App() {
         setStoredUser(data.user)
         setUser(data.user)
         syncAdminEmail(data.user?.email || "")
+        setAuthReady(true)
       })
       .catch(() => {
         clearAuth()
         setUser(null)
         syncAdminEmail("")
+        setAuthReady(true)
       })
   }, [])
 
@@ -90,11 +98,13 @@ export default function App() {
   }
 
   const leadscoutEntry = () => {
+    if (!authReady) return <div className="page" style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-secondary)" }}>Restoring session…</div>
     if (!user) return <Navigate to="/login" />
     return <Navigate to="/dashboard" />
   }
 
   const protectedArea = (element) => {
+    if (!authReady) return <div className="page" style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-secondary)" }}>Restoring session…</div>
     if (!user) return <Navigate to="/login" />
     return element
   }
@@ -111,7 +121,7 @@ export default function App() {
         <Route path="/dashboard" element={protectedArea(<DashboardPage user={user} onLogout={logout} />)} />
         <Route path="/leads" element={protectedArea(<LeadsPage user={user} onLogout={logout} />)} />
         <Route path="/profile"  element={protectedArea(<ProfilePage user={user} onLogout={logout} />)} />
-        <Route path="/admin"    element={<AdminPage user={user} onLogout={logout} />} />
+        <Route path="/admin"    element={protectedArea(<AdminPage user={user} onLogout={logout} />)} />
       </Routes>
     </Router>
   )
