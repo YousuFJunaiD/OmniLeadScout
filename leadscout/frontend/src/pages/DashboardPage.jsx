@@ -956,9 +956,33 @@ export default function DashboardPage({ user, onLogout }) {
           (typeof data?.detail === "string" ? data.detail : "") ||
           data?.error ||
           "Upgrade your plan to continue"
+        keepSocketAliveRef.current = false
+        if (statusPollRef.current) {
+          clearInterval(statusPollRef.current)
+          statusPollRef.current = null
+        }
+        if (wsRef.current) {
+          wsRef.current.onclose = null
+          wsRef.current.onerror = null
+          wsRef.current.onmessage = null
+          wsRef.current.close()
+          wsRef.current = null
+        }
+        clearActiveJob()
+        setJobId(null)
+        setCanDownload(false)
+        setLeads([])
+        setProgress({ current: 0, total: 0, query: "" })
         setRuntimeErrorDetails(details)
         setRuntimeStatus(errorMessage)
         setScraping(false)
+        resetLiveBuffers()
+        pushFeedMessage(
+          errorMessage === "Daily search limit reached"
+            ? "Daily search limit exhausted for your plan."
+            : errorMessage,
+          "error"
+        )
         await refreshUsage()
         return
       }

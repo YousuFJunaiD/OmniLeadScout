@@ -63,7 +63,7 @@ export default function LoginPage({ onLogin }) {
           {mode === "register" && (
             <div style={{ marginBottom: 16 }}>
               <label>Full name</label>
-              <input placeholder="Mohammed Ainan" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} />
+              <input placeholder="Your full name" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} />
             </div>
           )}
           <div style={{ marginBottom: 16 }}>

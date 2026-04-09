@@ -5,6 +5,7 @@ export default function Nav({ user, onLogout }) {
   const loc = useLocation()
   const isGuest = !user || user.id === "guest"
   const plan = user?.plan ? user.plan.toUpperCase() : "STARTER"
+  const isAdmin = (user?.role || "user").toLowerCase() === "admin"
 
   return (
     <nav className="nav">
@@ -25,7 +26,7 @@ export default function Nav({ user, onLogout }) {
             <Link to="/dashboard" className={`nav-link ${loc.pathname === "/dashboard" ? "active" : ""}`}>Dashboard</Link>
             <Link to="/leads" className={`nav-link ${loc.pathname === "/leads" ? "active" : ""}`}>My Leads</Link>
             <Link to="/profile" className={`nav-link ${loc.pathname === "/profile" ? "active" : ""}`}>Profile</Link>
-            {user.role === "admin" && (
+            {isAdmin && (
               <Link to="/admin" className={`nav-link ${loc.pathname === "/admin" ? "active" : ""}`}>Admin</Link>
             )}
             <span className="badge badge-cyan nav-plan" style={{ marginLeft: 8 }}>{plan}</span>
