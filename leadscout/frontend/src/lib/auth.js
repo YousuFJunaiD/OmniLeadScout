@@ -42,7 +42,7 @@ export function setStoredUser(user) {
   if (user) {
     const safeUser = { 
       id: user.id, 
-      email: user.email, 
+      email: String(user.email || "").trim().toLowerCase(),
       name: user.name || user.full_name, 
       role: user.role, 
       plan: user.plan 
@@ -54,6 +54,14 @@ export function setStoredUser(user) {
 export function clearAuth() {
   clearToken()
   getStorage()?.removeItem(USER_KEY)
+  if (typeof window !== "undefined") {
+    window.localStorage.removeItem("user_email")
+    Object.keys(window.localStorage).forEach((key) => {
+      if (key.startsWith("ls_active_job_")) {
+        window.localStorage.removeItem(key)
+      }
+    })
+  }
 }
 
 export function isTokenExpired(token) {

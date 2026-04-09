@@ -28,9 +28,9 @@ export default function Nav({ user, onLogout }) {
             {user.role === "admin" && (
               <Link to="/admin" className={`nav-link ${loc.pathname === "/admin" ? "active" : ""}`}>Admin</Link>
             )}
-            <span className="badge badge-cyan" style={{ marginLeft: 8 }}>{plan}</span>
-            <span style={{ fontSize: 12, color: "var(--text-secondary)", paddingLeft: 8 }}>{user.name}</span>
-            <div style={{ width: 1, height: 20, background: "var(--border)", margin: "0 8px" }} />
+            <span className="badge badge-cyan nav-plan" style={{ marginLeft: 8 }}>{plan}</span>
+            <span className="nav-user-name" style={{ fontSize: 12, color: "var(--text-secondary)", paddingLeft: 8 }}>{user.name}</span>
+            <div className="nav-divider" style={{ width: 1, height: 20, background: "var(--border)", margin: "0 8px" }} />
             <button className="btn btn-ghost" style={{ padding: "6px 14px" }} onClick={onLogout}>Sign out</button>
           </>
         )}

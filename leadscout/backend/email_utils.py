@@ -1,3 +1,4 @@
+import logging
 import os
 from typing import Optional
 
@@ -8,8 +9,9 @@ from env_utils import require_env
 
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
-RESEND_API_KEY = require_env("RESEND_API_KEY")
-EMAIL_FROM = os.getenv("RESEND_FROM_EMAIL", "LeadScout <no-reply@example.com>").strip()
+_RAW_RESEND_API_KEY = require_env("RESEND_API_KEY")
+RESEND_API_KEY = _RAW_RESEND_API_KEY[_RAW_RESEND_API_KEY.find("re_"):] if "re_" in _RAW_RESEND_API_KEY and not _RAW_RESEND_API_KEY.startswith("re_") else _RAW_RESEND_API_KEY
+EMAIL_FROM = os.getenv("RESEND_FROM_EMAIL", "LeadScout <onboarding@resend.dev>").strip()
 
 
 import httpx
@@ -32,6 +34,9 @@ async def send_email(to: str, subject: str, html: str) -> bool:
                     "html": html,
                 }
             )
+            if response.status_code >= 400:
+                logging.error("Resend email failed: status=%s body=%s", response.status_code, response.text[:500])
             return response.status_code < 400
-    except Exception:
+    except Exception as exc:
+        logging.exception("Resend email request crashed: %s", exc)
         return False

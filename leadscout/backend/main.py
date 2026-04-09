@@ -586,6 +586,14 @@ def publish_event(job: dict, message: dict):
         job.get("listeners", set()).discard(q)
 
 
+def resolve_final_job_status(cancelled: bool, accepted_leads: int) -> str:
+    if cancelled:
+        return "stopped"
+    if int(accepted_leads or 0) <= 0:
+        return "no_results"
+    return "completed"
+
+
 async def run_job(job_id: str):
     job = active_jobs.get(job_id)
     if not job:
@@ -781,7 +789,7 @@ async def run_job(job_id: str):
         flush_pending(force_save_seen=True)
         save_seen_leads(seen)
 
-        final_status = "stopped" if job.get("cancelled") else "completed"
+        final_status = resolve_final_job_status(job.get("cancelled"), accepted_leads)
 
         generated = generate_job_csv_from_db(job_id, niche)
         # Keep a rolling combined export per niche so users can always fetch one complete file.
@@ -1460,7 +1468,7 @@ async def run_job_v2(job_id: str):
         except Exception:
             pass
 
-        final_status = "stopped" if job.get("cancelled") else "completed"
+        final_status = resolve_final_job_status(job.get("cancelled"), accepted_leads)
         update_job_db(job_id, final_status, accepted_leads, csv_path)
         try:
             update_scrape_job(job_id, status=final_status, leads_found=accepted_leads)
@@ -1659,7 +1667,7 @@ def logout():
 
 
 @app.post("/auth/forgot-password")
-def forgot_password(body: ForgotPasswordBody, request: Request):
+async def forgot_password(body: ForgotPasswordBody, request: Request):
     rate_key = _auth_rate_limit_key(request, body.email)
     if not _enforce_rate_limit(email_request_log, rate_key, EMAIL_RATE_LIMIT_REQUESTS, EMAIL_RATE_LIMIT_WINDOW_SECONDS):
         logging.warning("Password reset email rate limit exceeded for %s", body.email)
@@ -1668,7 +1676,7 @@ def forgot_password(body: ForgotPasswordBody, request: Request):
     if user:
         token = _create_password_reset_token(user)
         reset_url = f"{PRIMARY_FRONTEND_ORIGIN}/reset-password?token={token}"
-        send_email(
+        sent = await send_email(
             user.get("email", ""),
             "Reset your LeadScout password",
             f"""
@@ -1678,6 +1686,8 @@ def forgot_password(body: ForgotPasswordBody, request: Request):
             <p>This link expires in 1 hour.</p>
             """,
         )
+        if not sent:
+            logging.error("Password reset email failed to send for %s", user.get("email", ""))
     return {"ok": True}
 
 

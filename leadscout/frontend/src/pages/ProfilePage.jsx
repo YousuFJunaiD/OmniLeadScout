@@ -295,7 +295,7 @@ export default function ProfilePage({ user, onLogout }) {
                       <td>{h.location || "—"}</td>
                       <td style={{ color: "var(--accent-cyan)", fontFamily: "var(--font-mono)", fontWeight: 600 }}>{Number(h.effective_lead_count||0).toLocaleString()}</td>
                       <td style={{ fontSize: 11 }}>{h.created_at ? new Date(h.created_at).toLocaleDateString() : "—"}</td>
-                      <td><span className={`badge ${h.status==="completed"?"badge-green":h.status==="running"?"badge-cyan":"badge-red"}`}>{h.status}</span></td>
+                      <td><span className={`badge ${h.status==="completed"?"badge-green":h.status==="running"?"badge-cyan":h.status==="stopped"||h.status==="stopping"||h.status==="no_results"?"badge-gold":"badge-red"}`}>{h.status}</span></td>
                       <td>
                         <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap" }}>
                           {h.merged_count > 1 && (
@@ -308,7 +308,7 @@ export default function ProfilePage({ user, onLogout }) {
                               live {Number(h.processed_areas || 0)}/{Number(getTotalAreas(h) || 0)} areas
                             </span>
                           )}
-                          {((h.status==="completed" || h.status==="stopped") && Number(h.effective_lead_count||0) > 0) && (
+                          {((h.status==="completed" || h.status==="stopped" || h.status==="no_results") && Number(h.effective_lead_count||0) > 0) && (
                             <>
                               <button className="btn btn-ghost" style={{ padding:"4px 12px",fontSize:11 }} onClick={() => viewLeads(h)}>👁 View Data</button>
                               <button className="btn btn-ghost" style={{ padding:"4px 12px",fontSize:11 }} onClick={() => download(h.job_id,`${h.profession}_${h.job_id?.slice(0,8)}.csv`)}>↓ CSV</button>

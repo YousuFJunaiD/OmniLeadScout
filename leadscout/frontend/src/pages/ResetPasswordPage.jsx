@@ -4,6 +4,15 @@ import { Link, useNavigate, useSearchParams } from "react-router-dom"
 import SparklesBg from "../components/SparklesBg"
 import { apiUrl, getApiHeaders } from "../lib/api"
 
+const toReadableError = (value, fallback) => {
+  if (!value) return fallback
+  if (typeof value === "string") return value
+  if (typeof value === "object") {
+    return value.error || value.detail || value.message || fallback
+  }
+  return fallback
+}
+
 export default function ResetPasswordPage() {
   const [searchParams] = useSearchParams()
   const navigate = useNavigate()
@@ -45,10 +54,10 @@ export default function ResetPasswordPage() {
         body: JSON.stringify({ email: email.trim() }),
       })
       const data = await res.json().catch(() => ({}))
-      if (!res.ok) throw new Error(data.detail || "Unable to send reset link")
+      if (!res.ok) throw new Error(toReadableError(data?.detail || data, "Unable to send reset link"))
       setMessage({ tone: "success", text: "If that email exists, we just sent a reset link." })
     } catch (error) {
-      setMessage({ tone: "error", text: error.message || "Unable to send reset link." })
+      setMessage({ tone: "error", text: toReadableError(error?.message, "Unable to send reset link.") })
     } finally {
       setLoading(false)
     }
@@ -72,11 +81,11 @@ export default function ResetPasswordPage() {
         body: JSON.stringify({ token, password }),
       })
       const data = await res.json().catch(() => ({}))
-      if (!res.ok) throw new Error(data.detail || "Unable to reset password")
+      if (!res.ok) throw new Error(toReadableError(data?.detail || data, "Unable to reset password"))
       setMessage({ tone: "success", text: "Password updated. Redirecting to login…" })
       window.setTimeout(() => navigate("/login"), 900)
     } catch (error) {
-      setMessage({ tone: "error", text: error.message || "Unable to reset password." })
+      setMessage({ tone: "error", text: toReadableError(error?.message, "Unable to reset password.") })
     } finally {
       setLoading(false)
     }

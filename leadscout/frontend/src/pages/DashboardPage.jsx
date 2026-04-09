@@ -506,6 +506,22 @@ export default function DashboardPage({ user, onLogout }) {
   const authRequest = (url, options = {}) =>
     authFetch(url, options, () => navigate("/login"))
 
+  const toReadableError = (value, fallback = "Something went wrong") => {
+    if (!value) return fallback
+    if (typeof value === "string") return value
+    if (typeof value === "object") {
+      return value.error || value.detail || value.message || fallback
+    }
+    return fallback
+  }
+
+  const getStatusBadgeClass = (status) => {
+    if (status === "completed") return "badge-green"
+    if (status === "running") return "badge-cyan"
+    if (status === "stopping" || status === "stopped" || status === "no_results") return "badge-gold"
+    return "badge-red"
+  }
+
   const flushLiveFeed = () => {
     const leadsBatch = pendingLeadsRef.current
     const delta = pendingStatsRef.current
@@ -750,7 +766,13 @@ export default function DashboardPage({ user, onLogout }) {
         keepSocketAliveRef.current = false
         setScraping(false)
         setCanDownload((msg.data?.total || 0) > 0)
-        setRuntimeStatus("Completed")
+        setRuntimeStatus(
+          msg.data?.status === "no_results"
+            ? "Scrape finished, but no leads were saved."
+            : msg.data?.status === "stopped"
+              ? "Scrape stopped."
+              : "Completed"
+        )
         clearActiveJob()
         refreshResumeCandidate()
         refreshHistory()
@@ -832,6 +854,7 @@ export default function DashboardPage({ user, onLogout }) {
   }
 
   const startScrape = async () => {
+    if (scraping) return
     const finalCity    = customCity.trim() || city
     const finalQueries = queries.length ? queries : (customPro || profession ? [customPro || profession] : [])
     const requestedPlatforms = isStarterPlan
@@ -880,13 +903,18 @@ export default function DashboardPage({ user, onLogout }) {
         await refreshUsage()
         return
       }
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        throw new Error(toReadableError(data?.detail || data, "Unable to start scrape"))
+      }
       const data = await res.json()
       setJobId(data.job_id)
       localStorage.setItem(ACTIVE_JOB_KEY, data.job_id)
       attachSocket(data.job_id, { reset: true })
-    } catch {
+    } catch (error) {
       setScraping(false)
       setRuntimeErrorDetails(null)
+      setRuntimeStatus(toReadableError(error?.message, "Unable to start scrape"))
     }
   }
 
@@ -1521,7 +1549,7 @@ export default function DashboardPage({ user, onLogout }) {
                           </div>
                           <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 2 }}>
                             {h.effective_lead_count || h.lead_count || 0} leads · {h.processed_areas || 0}/{h.total_areas || "?"} areas ·{" "}
-                            <span className={`badge ${h.status === "completed" ? "badge-green" : h.status === "stopped" ? "badge-gold" : "badge-red"}`}>
+                            <span className={`badge ${getStatusBadgeClass(h.status)}`}>
                               {h.status}
                             </span>
                           </div>

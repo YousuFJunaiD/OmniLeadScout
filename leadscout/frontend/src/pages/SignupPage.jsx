@@ -4,7 +4,14 @@ import { Link, useNavigate } from "react-router-dom"
 import SparklesBg from "../components/SparklesBg"
 import { apiUrl, getApiHeaders } from "../lib/api"
 
-
+const toReadableError = (value, fallback = "Something went wrong") => {
+  if (!value) return fallback
+  if (typeof value === "string") return value
+  if (typeof value === "object") {
+    return value.error || value.detail || value.message || fallback
+  }
+  return fallback
+}
 
 export default function SignupPage({ onLogin }) {
   const [form, setForm]     = useState({ name: "", email: "", password: "" })
@@ -27,10 +34,10 @@ export default function SignupPage({ onLogin }) {
         body: JSON.stringify(form),
       })
       const data = await res.json()
-      if (!res.ok) throw new Error(data.detail || "Registration failed")
+      if (!res.ok) throw new Error(toReadableError(data?.detail || data, "Registration failed"))
       onLogin(data)
       nav("/dashboard")
-    } catch (e) { setError(e.message) }
+    } catch (e) { setError(toReadableError(e?.message, "Registration failed")) }
     setLoading(false)
   }
 

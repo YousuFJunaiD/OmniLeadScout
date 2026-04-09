@@ -21,12 +21,14 @@ export default function LeadsPage({ user, onLogout }) {
   const navigate = useNavigate()
   const [leads, setLeads] = useState([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState("")
   const [search, setSearch] = useState("")
   const [source, setSource] = useState("")
   const [websiteStatus, setWebsiteStatus] = useState("")
 
   const loadLeads = async () => {
     setLoading(true)
+    setError("")
     const params = new URLSearchParams()
     if (search.trim()) params.set("search", search.trim())
     if (source) params.set("source", source)
@@ -34,6 +36,7 @@ export default function LeadsPage({ user, onLogout }) {
 
     const res = await authFetch(`/user/leads?${params.toString()}`, {}, () => navigate("/login"))
     if (!res.ok) {
+      setError("Unable to load leads right now.")
       setLoading(false)
       return
     }
@@ -106,8 +109,12 @@ export default function LeadsPage({ user, onLogout }) {
             <div className="table-wrap">
               {loading ? (
                 <div style={{ padding: 40, textAlign: "center", color: "var(--text-muted)" }}>Loading leads...</div>
+              ) : error ? (
+                <div style={{ padding: 40, textAlign: "center", color: "var(--accent-red)" }}>{error}</div>
               ) : filtered.length === 0 ? (
-                <div style={{ padding: 40, textAlign: "center", color: "var(--text-muted)" }}>No leads found for the selected filters.</div>
+                <div style={{ padding: 40, textAlign: "center", color: "var(--text-muted)" }}>
+                  {search || source || websiteStatus ? "No leads found for the selected filters." : "No leads saved yet."}
+                </div>
               ) : (
                 <table className="data-table">
                   <thead>

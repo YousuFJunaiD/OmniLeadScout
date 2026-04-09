@@ -259,7 +259,7 @@ def list_user_history(user_id: str) -> List[Dict[str, Any]]:
                 "persisted_leads": row.get("leads_found", 0),
                 "areas": json.dumps(queries if isinstance(queries, list) else []),
                 "total_areas": len(queries) if isinstance(queries, list) else 0,
-                "processed_areas": len(queries) if row.get("status") in ("completed", "stopped") and isinstance(queries, list) else 0,
+                "processed_areas": len(queries) if row.get("status") in ("completed", "stopped", "no_results") and isinstance(queries, list) else 0,
                 "niche": f"{(queries[0] if isinstance(queries, list) and queries else 'leads')}_{row.get('city') or 'city'}".replace(" ", "_").lower(),
             }
         )

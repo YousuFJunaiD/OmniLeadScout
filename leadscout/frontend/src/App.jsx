@@ -28,10 +28,17 @@ export default function App() {
   useEffect(() => {
     const token = getToken()
     const storedUser = getStoredUser()
-    if (!token || !storedUser) return
+    if (!token && !storedUser) return
+    if (!token || !storedUser) {
+      clearAuth()
+      setUser(null)
+      syncAdminEmail("")
+      return
+    }
     if (isTokenExpired(token)) {
       clearAuth()
       setUser(null)
+      syncAdminEmail("")
       return
     }
 
@@ -74,7 +81,6 @@ export default function App() {
   const logout = () => {
     clearAuth()
     setUser(null)
-    syncAdminEmail("")
   }
 
   const updateUser = (userData) => {

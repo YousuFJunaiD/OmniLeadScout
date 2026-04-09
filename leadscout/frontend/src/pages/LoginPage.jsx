@@ -4,7 +4,14 @@ import { Link, useNavigate } from "react-router-dom"
 import SparklesBg from "../components/SparklesBg"
 import { apiUrl, getApiHeaders } from "../lib/api"
 
-
+const toReadableError = (value, fallback = "Something went wrong") => {
+  if (!value) return fallback
+  if (typeof value === "string") return value
+  if (typeof value === "object") {
+    return value.error || value.detail || value.message || fallback
+  }
+  return fallback
+}
 
 export default function LoginPage({ onLogin }) {
   const [mode, setMode]     = useState("login")
@@ -24,13 +31,13 @@ export default function LoginPage({ onLogin }) {
       })
       const data = await res.json()
       if (!res.ok) {
-        throw new Error(data.detail || "Failed")
+        throw new Error(toReadableError(data?.detail || data, "Failed"))
       }
       
       onLogin({ token: data.token, user: data.user })
       navigate("/dashboard")
     } catch (e) { 
-      setError(e.message) 
+      setError(toReadableError(e?.message, "Failed")) 
     }
     setLoading(false)
   }
