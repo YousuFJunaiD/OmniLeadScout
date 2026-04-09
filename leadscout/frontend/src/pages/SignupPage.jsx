@@ -10,6 +10,7 @@ export default function SignupPage({ onLogin }) {
   const [form, setForm]     = useState({ name: "", email: "", password: "" })
   const [error, setError]   = useState("")
   const [loading, setLoading] = useState(false)
+  const [showPassword, setShowPassword] = useState(false)
   const nav = useNavigate()
 
   const set = (k) => (e) => setForm(f => ({ ...f, [k]: e.target.value }))
@@ -99,16 +100,38 @@ export default function SignupPage({ onLogin }) {
             </div>
             <div>
               <label>Password</label>
-              <input
-                style={field}
-                type="password"
-                placeholder="Min. 8 characters"
-                value={form.password}
-                onChange={set("password")}
-                onKeyDown={e => e.key === "Enter" && submit()}
-                onFocus={e => { e.target.style.borderColor = "rgba(255,255,255,0.55)" }}
-                onBlur={e  => { e.target.style.borderColor = "rgba(255,255,255,0.18)" }}
-              />
+              <div style={{ position: "relative" }}>
+                <input
+                  style={{ ...field, paddingRight: 88 }}
+                  type={showPassword ? "text" : "password"}
+                  placeholder="Min. 8 characters"
+                  value={form.password}
+                  onChange={set("password")}
+                  onKeyDown={e => e.key === "Enter" && submit()}
+                  onFocus={e => { e.target.style.borderColor = "rgba(255,255,255,0.55)" }}
+                  onBlur={e  => { e.target.style.borderColor = "rgba(255,255,255,0.18)" }}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((value) => !value)}
+                  style={{
+                    position: "absolute",
+                    right: 12,
+                    top: "50%",
+                    transform: "translateY(-50%)",
+                    background: "none",
+                    border: "none",
+                    color: "rgba(255,255,255,0.62)",
+                    cursor: "pointer",
+                    fontSize: 11,
+                    letterSpacing: "0.08em",
+                    textTransform: "uppercase",
+                    fontFamily: "var(--font-display)",
+                  }}
+                >
+                  {showPassword ? "Hide" : "Show"}
+                </button>
+              </div>
             </div>
           </div>
 

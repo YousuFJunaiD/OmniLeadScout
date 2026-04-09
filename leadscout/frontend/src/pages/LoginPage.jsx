@@ -11,6 +11,7 @@ export default function LoginPage({ onLogin }) {
   const [form, setForm]     = useState({ name: "", email: "", password: "" })
   const [error, setError]   = useState("")
   const [loading, setLoading] = useState(false)
+  const [showPassword, setShowPassword] = useState(false)
   const navigate = useNavigate()
 
   const submit = async () => {
@@ -64,7 +65,46 @@ export default function LoginPage({ onLogin }) {
           </div>
           <div style={{ marginBottom: 24 }}>
             <label>Password</label>
-            <input type="password" placeholder="••••••••" value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} onKeyDown={e => e.key === "Enter" && submit()} />
+            <div style={{ position: "relative" }}>
+              <input
+                type={showPassword ? "text" : "password"}
+                placeholder="••••••••"
+                value={form.password}
+                onChange={e => setForm({ ...form, password: e.target.value })}
+                onKeyDown={e => e.key === "Enter" && submit()}
+                style={{ paddingRight: 88 }}
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword((value) => !value)}
+                style={{
+                  position: "absolute",
+                  right: 12,
+                  top: "50%",
+                  transform: "translateY(-50%)",
+                  background: "none",
+                  border: "none",
+                  color: "var(--text-secondary)",
+                  cursor: "pointer",
+                  fontSize: 12,
+                  letterSpacing: "0.08em",
+                  textTransform: "uppercase",
+                  fontFamily: "var(--font-display)",
+                }}
+              >
+                {showPassword ? "Hide" : "Show"}
+              </button>
+            </div>
+            {mode === "login" && (
+              <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 10 }}>
+                <Link
+                  to={form.email.trim() ? `/reset-password?email=${encodeURIComponent(form.email.trim())}` : "/reset-password"}
+                  style={{ color: "var(--accent-cyan)", textDecoration: "none", fontSize: 12, letterSpacing: "0.03em" }}
+                >
+                  Forgot password?
+                </Link>
+              </div>
+            )}
           </div>
 
           {error && (

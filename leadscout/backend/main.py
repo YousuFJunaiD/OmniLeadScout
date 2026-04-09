@@ -77,6 +77,10 @@ validate_required_env(
 )
 
 FRONTEND_ORIGIN = require_env("FRONTEND_ORIGIN")
+PRIMARY_FRONTEND_ORIGIN = next(
+    (origin.strip().rstrip("/") for origin in FRONTEND_ORIGIN.split(",") if origin.strip()),
+    "http://localhost:5173",
+)
 MAX_REQUEST_BYTES = int(os.getenv("MAX_REQUEST_BYTES", "1048576"))
 ALLOWED_ORIGINS = sorted(
     {
@@ -1663,7 +1667,7 @@ def forgot_password(body: ForgotPasswordBody, request: Request):
     user = get_user_by_email(body.email)
     if user:
         token = _create_password_reset_token(user)
-        reset_url = f"http://localhost:5173/reset-password?token={token}"
+        reset_url = f"{PRIMARY_FRONTEND_ORIGIN}/reset-password?token={token}"
         send_email(
             user.get("email", ""),
             "Reset your LeadScout password",

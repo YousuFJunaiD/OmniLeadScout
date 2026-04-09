@@ -7,6 +7,7 @@ import HomePage from "./pages/HomePage"
 import LeadsPage from "./pages/LeadsPage"
 import LoginPage from "./pages/LoginPage"
 import ProfilePage from "./pages/ProfilePage"
+import ResetPasswordPage from "./pages/ResetPasswordPage"
 import SignupPage from "./pages/SignupPage"
 import PricingPage from "./pages/PricingPage"
 import { clearAuth, getStoredUser, getToken, isTokenExpired, setStoredUser, setToken, tryRefreshToken } from "./lib/auth"
@@ -97,6 +98,7 @@ export default function App() {
       <Routes>
         <Route path="/" element={<HomePage />} />
         <Route path="/login"    element={<LoginPage  onLogin={login} />} />
+        <Route path="/reset-password" element={<ResetPasswordPage />} />
         <Route path="/signup"   element={<SignupPage onLogin={login} />} />
         <Route path="/pricing"  element={<PricingPage user={user} onPlanSelected={updateUser} />} />
         <Route path="/leadscout" element={leadscoutEntry()} />

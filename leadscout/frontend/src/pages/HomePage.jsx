@@ -3,6 +3,8 @@ import { Link } from "react-router-dom"
 import Nav from "../components/Nav"
 import SparklesBg from "../components/SparklesBg"
 
+const LEADSCOUT_LOGIN_URL = "https://omni-lead-scout.vercel.app/login"
+
 const STATS = [
   { value: "140K+", label: "Leads per profession" },
   { value: "50+",   label: "Countries covered" },
@@ -86,9 +88,15 @@ export default function HomePage() {
           </p>
 
           <div style={{ display: "flex", gap: 12, justifyContent: "center" }}>
-            <Link to="/signup" className="btn btn-primary" style={{ padding: "14px 36px", fontSize: 12 }}>
+            <a
+              href={LEADSCOUT_LOGIN_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="btn btn-primary"
+              style={{ padding: "14px 36px", fontSize: 12 }}
+            >
               Start scraping →
-            </Link>
+            </a>
             <Link to="/pricing" className="btn btn-ghost" style={{ padding: "14px 36px", fontSize: 12 }}>
               See pricing
             </Link>
@@ -188,9 +196,15 @@ export default function HomePage() {
         <p style={{ color: "rgba(255,255,255,0.45)", marginBottom: 36, fontSize: 15 }}>
           Every business. Every city. Every niche. Enriched with owner details.
         </p>
-        <Link to="/signup" className="btn btn-primary" style={{ padding: "14px 44px", fontSize: 12 }}>
+        <a
+          href={LEADSCOUT_LOGIN_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="btn btn-primary"
+          style={{ padding: "14px 44px", fontSize: 12 }}
+        >
           Get started →
-        </Link>
+        </a>
       </section>
 
       {/* ── Footer ────────────────────────────────────────── */}
