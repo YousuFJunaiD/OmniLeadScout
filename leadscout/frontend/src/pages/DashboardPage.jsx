@@ -480,8 +480,6 @@ export default function DashboardPage({ user, onLogout }) {
   const [enableIM, setEnableIM]         = useState(true)
   const [websiteFilter, setWebsiteFilter] = useState("minimal")
   const [maxPerQuery, setMaxPerQuery]   = useState(25)
-  const [useProxy, setUseProxy]         = useState(false)
-  const [proxyStats, setProxyStats]     = useState(null)   // { live, fastest_ms, by_protocol }
   const [customCity, setCustomCity]     = useState("")
   const [usage, setUsage]               = useState(null)
   const wsRef    = useRef(null)
@@ -807,8 +805,6 @@ export default function DashboardPage({ user, onLogout }) {
       } else if (msg.type === "info") {
         setRuntimeStatus(String(msg.data || ""))
         pushFeedMessage(String(msg.data || ""))
-      } else if (msg.type === "proxy_stats") {
-        setProxyStats(msg.data || null)
       } else if (msg.type === "block_wait") {
         const d = msg.data || {}
         const wait = Number(d.wait_seconds || 0)
@@ -923,7 +919,6 @@ export default function DashboardPage({ user, onLogout }) {
     keepSocketAliveRef.current = true
     resetLiveBuffers()
     setLeads([]); setScraping(true)
-    setProxyStats(null)
     setCanDownload(false)
     setRuntimeStatus("")
     setRuntimeErrorDetails(null)
@@ -945,7 +940,6 @@ export default function DashboardPage({ user, onLogout }) {
           enable_indiamart: requestedPlatforms.indiamart,
           website_filter:  websiteFilter,
           max_per_query:   maxPerQuery,
-          use_proxy:       useProxy,
         }),
       })
       if (res.status === 403) {
@@ -1236,16 +1230,16 @@ export default function DashboardPage({ user, onLogout }) {
       <SparklesBg />
       <Nav user={user} onLogout={onLogout} />
       <div style={{ paddingTop: 64, minHeight: "100vh" }}>
-        <div style={{ maxWidth: 1400, margin: "0 auto", padding: "32px 24px" }}>
+        <div className="dashboard-page-shell" style={{ maxWidth: 1400, margin: "0 auto", padding: "32px 24px" }}>
           <div style={{ marginBottom: 28 }} className="anim-fade-up">
             <h1 style={{ fontSize: 28, fontWeight: 800, letterSpacing: "-0.02em", marginBottom: 4 }}>Lead Scraper</h1>
             <p style={{ color: "var(--text-secondary)", fontSize: 14 }}>Configure target and launch — every lead auto-enriched</p>
           </div>
 
-          <div style={{ display: "grid", gridTemplateColumns: "380px 1fr", gap: 24, alignItems: "start" }}>
+          <div className="dashboard-main-grid" style={{ display: "grid", gridTemplateColumns: "380px 1fr", gap: 24, alignItems: "start" }}>
 
             {/* ── LEFT PANEL ── */}
-            <div style={{ display: "flex", flexDirection: "column", gap: 14 }} className="stagger">
+            <div style={{ display: "flex", flexDirection: "column", gap: 14 }} className="stagger dashboard-left-panel">
 
               {/* Location card */}
               <div className="card">
@@ -1314,7 +1308,7 @@ export default function DashboardPage({ user, onLogout }) {
                 {/* Add custom area */}
                 <div>
                   <label>Add area / unknown place</label>
-                  <div style={{ display: "flex", gap: 8 }}>
+                  <div className="dashboard-inline-input" style={{ display: "flex", gap: 8 }}>
                     <input
                       placeholder="e.g. Bhatkal, Duqm, Any Town"
                       value={newArea}
@@ -1365,7 +1359,7 @@ export default function DashboardPage({ user, onLogout }) {
                     ))}
                   </div>
                 )}
-                <div style={{ display: "flex", gap: 8 }}>
+                <div className="dashboard-inline-input" style={{ display: "flex", gap: 8 }}>
                   <input placeholder="Add query, e.g. gyms, clinics..." value={queryInput} onChange={e => setQueryInput(e.target.value)}
                     onKeyDown={e => e.key === "Enter" && addQuery()} style={{ flex: 1 }} />
                   <button className="btn btn-ghost" style={{ padding: "8px 14px", flexShrink: 0, fontSize: 12 }} onClick={addQuery}>+ Add</button>
@@ -1390,7 +1384,7 @@ export default function DashboardPage({ user, onLogout }) {
                 <p style={{ fontSize: 10, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--text-muted)", marginBottom: 14 }}>Platforms & Filters</p>
 
                 <label style={{ marginBottom: 8, display: "block" }}>Platforms</label>
-                <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+                <div className="dashboard-platform-grid" style={{ display: "flex", gap: 8, marginBottom: 16 }}>
                   {[["Maps", enableMaps, setEnableMaps, "var(--accent-cyan)", false],
                     ["JustDial", enableJD, setEnableJD, "var(--accent-violet)", isStarterPlan],
                     ["IndiaMart", enableIM, setEnableIM, "var(--accent-gold)", isStarterPlan]].map(([label, on, setter, color, locked]) => (
@@ -1426,35 +1420,10 @@ export default function DashboardPage({ user, onLogout }) {
                 <input type="range" min={5} max={100} step={5} value={maxPerQuery}
                   onChange={e => setMaxPerQuery(Number(e.target.value))}
                   style={{ width: "100%", marginBottom: 16, accentColor: "var(--accent-cyan)" }} />
-
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <label style={{ margin: 0 }}>Auto-Rotating Proxy Pool</label>
-                  <button onClick={() => setUseProxy(v => !v)}
-                    style={{ padding: "4px 14px", fontSize: 11, borderRadius: 100, cursor: "pointer", transition: "all 0.15s",
-                      border: `1px solid ${useProxy ? "var(--accent-green)" : "var(--border)"}`,
-                      background: useProxy ? "var(--accent-green-dim, #00ff8822)" : "transparent",
-                      color: useProxy ? "var(--accent-green)" : "var(--text-muted)" }}>
-                    {useProxy ? "ON" : "OFF"}
-                  </button>
-                </div>
-                {useProxy && !proxyStats && (
-                  <p style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 6 }}>Pool loads when scraping starts (~30-60s)</p>
-                )}
-                {proxyStats && (
-                  <div style={{ marginTop: 10, padding: "10px 14px", background: "var(--bg-surface)", borderRadius: "var(--radius-sm)", fontSize: 12 }}>
-                    <div style={{ color: "var(--accent-green)", fontWeight: 600, marginBottom: 4 }}>
-                      Proxy pool live — {proxyStats.live} proxies
-                    </div>
-                    <div style={{ color: "var(--text-muted)" }}>
-                      Fastest: {proxyStats.fastest_ms}ms &nbsp;|&nbsp;
-                      {Object.entries(proxyStats.by_protocol || {}).map(([k, v]) => `${k}:${v}`).join(" · ")}
-                    </div>
-                  </div>
-                )}
               </div>
 
               {/* Launch */}
-              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              <div className="dashboard-row-buttons" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                 {!scraping ? (
                   <button className="btn btn-primary" style={{ width: "100%", padding: 14, fontSize: 14, justifyContent: "center" }}
                     onClick={startScrape}
@@ -1485,10 +1454,10 @@ export default function DashboardPage({ user, onLogout }) {
             </div>
 
             {/* ── RIGHT PANEL ── */}
-            <div style={{ display: "flex", flexDirection: "column", gap: 16 }} className="stagger">
+            <div style={{ display: "flex", flexDirection: "column", gap: 16 }} className="stagger dashboard-right-panel">
               {usage && (
                 <div className="card">
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, gap: 16, flexWrap: "wrap" }}>
+                  <div className="dashboard-section-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, gap: 16, flexWrap: "wrap" }}>
                     <div>
                       <div style={{ fontSize: 14, fontWeight: 700 }}>
                         Leads this month: {usageCount} / {usageLimit}{" "}
@@ -1519,7 +1488,7 @@ export default function DashboardPage({ user, onLogout }) {
                 </div>
               )}
 
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 12 }}>
+              <div className="dashboard-stats-grid" style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 12 }}>
                 {[["Total Leads",stats.total,"var(--accent-cyan)"],["With Owner",stats.withOwner,"var(--accent-violet)"],["With Email",stats.withEmail,"var(--accent-gold)"],["With Website",stats.withWebsite,"var(--accent-green)"]].map(([l,v,c],i) => (
                   <div key={i} className="card" style={{ padding: "16px 20px" }}>
                     <div style={{ fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 4 }}>{l}</div>
@@ -1530,7 +1499,7 @@ export default function DashboardPage({ user, onLogout }) {
 
               {(scraping || progress.total > 0) && (
                 <div className="card">
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                  <div className="dashboard-progress-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                       {scraping && <span className="stat-pill"><span className="dot" /> Running</span>}
                       <span style={{ fontSize: 13, color: "var(--text-secondary)" }}>{progress.query || "Initializing..."}</span>
@@ -1541,7 +1510,7 @@ export default function DashboardPage({ user, onLogout }) {
                   <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 6, textAlign: "right" }}>{pct}% complete</div>
                   {!!runtimeStatus && <div style={{ marginTop: 8, fontSize: 12, color: "var(--accent-gold)" }}>{runtimeStatus}</div>}
                   {scraping && liveUrl.name && (
-                    <div style={{ marginTop: 10, padding: "10px 14px", background: "var(--bg-surface)", borderRadius: "var(--radius-sm)", fontSize: 12 }}>
+                    <div className="dashboard-live-url" style={{ marginTop: 10, padding: "10px 14px", background: "var(--bg-surface)", borderRadius: "var(--radius-sm)", fontSize: 12 }}>
                       <div style={{ color: "var(--accent-cyan)", fontWeight: 600, marginBottom: 4 }}>Now scraping: {liveUrl.name}</div>
                       {liveUrl.maps_url && (
                         <a href={liveUrl.maps_url} target="_blank" rel="noreferrer" style={{ color: "var(--text-muted)", fontSize: 11, textDecoration: "none", wordBreak: "break-all" }}>
@@ -1561,7 +1530,7 @@ export default function DashboardPage({ user, onLogout }) {
               )}
 
               <div className="card" style={{ padding: 0, overflow: "hidden" }}>
-                <div style={{ padding: "16px 20px", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div className="dashboard-section-header" style={{ padding: "16px 20px", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                   <p style={{ fontSize: 13, fontWeight: 600 }}>Live Feed {scraping && <span style={{ fontSize: 11, color: "var(--accent-green)", marginLeft: 6 }}>● incoming</span>}</p>
                   {stats.total > 0 && <span style={{ fontSize: 11, color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>{stats.total} collected</span>}
                 </div>
@@ -1590,20 +1559,64 @@ export default function DashboardPage({ user, onLogout }) {
                       </p>
                     </div>
                   ) : (
-                    <table className="data-table">
-                      <thead>
-                        <tr>
-                          <th>Business</th>
-                          <th>Phone</th>
-                          <th>Email</th>
-                          <th>Website</th>
-                          <th>Web Status</th>
-                          <th>Source</th>
-                          <th>Listing</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {leads.map((lead,i) => {
+                    <>
+                      <div className="mobile-only dashboard-live-cards">
+                        {leads.map((lead, i) => {
+                          const wsColor = {
+                            no_website: "var(--accent-gold)",
+                            social_only: "var(--accent-violet)",
+                            minimal: "var(--accent-cyan)",
+                            full: "var(--accent-green)",
+                            unreachable: "var(--text-muted)",
+                          }[lead.website_status] || "var(--text-muted)"
+                          const srcColor = {
+                            google_maps: "var(--accent-cyan)",
+                            justdial: "var(--accent-violet)",
+                            indiamart: "var(--accent-gold)",
+                          }[lead.source] || "var(--text-muted)"
+                          const listingUrl = lead.listing_url || lead["Maps URL"] || ""
+                          return (
+                            <div key={`mobile-${i}`} className="dashboard-live-card">
+                              <div style={{ fontWeight: 600, color: "var(--text-primary)" }}>{lead.Name || "—"}</div>
+                              <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 4 }}>{lead.Category || lead.category || "Uncategorized"}</div>
+                              <div className="dashboard-live-meta">
+                                <div>Phone: {lead.Phone || lead.phone || "—"}</div>
+                                <div>Email: {lead.Email || lead.email || lead.Owner_Email_Guesses?.split(" | ")[0] || "—"}</div>
+                                <div style={{ color: wsColor }}>Web status: {lead.website_status || "—"}</div>
+                                <div style={{ color: srcColor }}>Source: {lead.source || "—"}</div>
+                              </div>
+                              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
+                                {(lead.Website || lead.website) ? (
+                                  <a href={lead.Website || lead.website} target="_blank" rel="noreferrer" className="badge badge-green" style={{ textDecoration: "none" }}>
+                                    Visit ↗
+                                  </a>
+                                ) : (
+                                  <span className="badge badge-red">No Website</span>
+                                )}
+                                {listingUrl ? (
+                                  <a href={listingUrl} target="_blank" rel="noreferrer" className="badge badge-cyan" style={{ textDecoration: "none" }}>
+                                    Listing ↗
+                                  </a>
+                                ) : null}
+                              </div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                      <table className="data-table desktop-only">
+                        <thead>
+                          <tr>
+                            <th>Business</th>
+                            <th>Phone</th>
+                            <th>Email</th>
+                            <th>Website</th>
+                            <th>Web Status</th>
+                            <th>Source</th>
+                            <th>Listing</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {leads.map((lead,i) => {
                           const wsColor = {
                             no_website:  "var(--accent-gold)",
                             social_only: "var(--accent-violet)",
@@ -1657,9 +1670,10 @@ export default function DashboardPage({ user, onLogout }) {
                               </td>
                             </tr>
                           )
-                        })}
-                      </tbody>
-                    </table>
+                          })}
+                        </tbody>
+                      </table>
+                    </>
                   )}
                 </div>
               </div>
@@ -1667,6 +1681,7 @@ export default function DashboardPage({ user, onLogout }) {
               {/* Scrape History */}
               <div className="card" style={{ padding: 0, overflow: "hidden" }}>
                 <div
+                  className="dashboard-section-header"
                   style={{ padding: "16px 20px", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" }}
                   onClick={() => { setShowHistory(!showHistory); if (!showHistory) refreshHistory() }}
                 >
@@ -1678,7 +1693,7 @@ export default function DashboardPage({ user, onLogout }) {
                     {history.length === 0 ? (
                       <div style={{ padding: "30px 20px", textAlign: "center", color: "var(--text-muted)", fontSize: 13 }}>No scrape jobs yet</div>
                     ) : history.map((h) => (
-                      <div key={h.job_id} style={{ padding: "12px 20px", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <div key={h.job_id} className="dashboard-history-row" style={{ padding: "12px 20px", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                         <div style={{ flex: 1 }}>
                           <div style={{ fontSize: 13, fontWeight: 500, color: "var(--text-primary)" }}>
                             {h.profession} — {h.location || "Unknown"}
@@ -1690,7 +1705,7 @@ export default function DashboardPage({ user, onLogout }) {
                             </span>
                           </div>
                         </div>
-                        <div style={{ display: "flex", gap: 6 }}>
+                        <div className="dashboard-history-actions" style={{ display: "flex", gap: 6 }}>
                           {(h.effective_lead_count || h.lead_count || 0) > 0 && (
                             <button
                               className="btn btn-ghost"

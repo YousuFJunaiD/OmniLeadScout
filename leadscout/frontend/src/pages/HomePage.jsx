@@ -87,7 +87,7 @@ export default function HomePage() {
             Auto-enriched with owner details, social media, and dev opportunity scoring.
           </p>
 
-          <div style={{ display: "flex", gap: 12, justifyContent: "center" }}>
+          <div className="home-cta-row" style={{ display: "flex", gap: 12, justifyContent: "center" }}>
             <a
               href={LEADSCOUT_LOGIN_URL}
               target="_blank"
@@ -104,7 +104,7 @@ export default function HomePage() {
         </div>
 
         {/* Stats bar */}
-        <div style={{
+        <div className="home-stats-grid" style={{
           display: "grid", gridTemplateColumns: "repeat(4,1fr)",
           marginTop: 80, maxWidth: 700, width: "100%",
           border: "1px solid var(--border)",
@@ -208,7 +208,7 @@ export default function HomePage() {
       </section>
 
       {/* ── Footer ────────────────────────────────────────── */}
-      <footer style={{
+      <footer className="home-footer" style={{
         borderTop: "1px solid var(--border)",
         padding: "24px 40px",
         display: "flex", justifyContent: "space-between", alignItems: "center",

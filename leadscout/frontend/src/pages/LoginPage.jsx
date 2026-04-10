@@ -43,7 +43,7 @@ export default function LoginPage({ onLogin }) {
   }
 
   return (
-    <div className="page" style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "100vh" }}>
+    <div className="page auth-shell" style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "100vh" }}>
       <SparklesBg />
       <div style={{ width: "100%", maxWidth: 420, padding: "0 24px", zIndex: 1 }} className="anim-fade-up">
         <Link to="/" style={{ display: "block", textAlign: "center", marginBottom: 40, textDecoration: "none" }}>
@@ -52,7 +52,7 @@ export default function LoginPage({ onLogin }) {
           </span>
         </Link>
 
-        <div className="card card-glow">
+        <div className="card card-glow auth-card-shell">
           <h2 style={{ fontSize: 20, fontWeight: 800, letterSpacing: "-0.02em", marginBottom: 4 }}>
             {mode === "login" ? "Welcome back" : "Create account"}
           </h2>

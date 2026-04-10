@@ -67,16 +67,16 @@ export default function LeadsPage({ user, onLogout }) {
       <SparklesBg />
       <Nav user={user} onLogout={onLogout} />
       <div style={{ paddingTop: 64 }}>
-        <div style={{ maxWidth: 1280, margin: "0 auto", padding: "36px 24px" }}>
+        <div className="leads-page-shell" style={{ maxWidth: 1280, margin: "0 auto", padding: "36px 24px" }}>
           <div className="card" style={{ marginBottom: 16 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", gap: 16, alignItems: "end", flexWrap: "wrap" }}>
+            <div className="leads-header" style={{ display: "flex", justifyContent: "space-between", gap: 16, alignItems: "end", flexWrap: "wrap" }}>
               <div>
                 <p style={{ fontSize: 10, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--text-muted)", marginBottom: 8 }}>My Leads</p>
                 <h1 style={{ fontSize: 28, fontWeight: 800, letterSpacing: "-0.02em" }}>Lead Library</h1>
               </div>
               <button className="btn btn-primary" onClick={exportCsv} disabled={!filtered.length}>Export All CSV</button>
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr auto", gap: 12, marginTop: 18 }}>
+            <div className="leads-filters-grid" style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr auto", gap: 12, marginTop: 18 }}>
               <input
                 placeholder="Search by name or city"
                 value={search}
@@ -116,40 +116,65 @@ export default function LeadsPage({ user, onLogout }) {
                   {search || source || websiteStatus ? "No leads found for the selected filters." : "No leads saved yet."}
                 </div>
               ) : (
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th>Name</th>
-                      <th>City</th>
-                      <th>Phone</th>
-                      <th>Email</th>
-                      <th>Source</th>
-                      <th>Website</th>
-                      <th>Status</th>
-                    </tr>
-                  </thead>
-                  <tbody>
+                <>
+                  <div className="mobile-only lead-mobile-list">
                     {filtered.map((lead) => (
-                      <tr key={lead.id}>
-                        <td>{lead.name || "—"}</td>
-                        <td>{lead.city || "—"}</td>
-                        <td>{lead.phone || "—"}</td>
-                        <td>{lead.email || "—"}</td>
-                        <td>{lead.source || "—"}</td>
-                        <td>
+                      <div key={`mobile-${lead.id}`} className="lead-mobile-card">
+                        <div style={{ fontWeight: 600, color: "var(--text-primary)" }}>{lead.name || "—"}</div>
+                        <div className="lead-mobile-meta">
+                          <div>City: {lead.city || "—"}</div>
+                          <div>Phone: {lead.phone || "—"}</div>
+                          <div>Email: {lead.email || "—"}</div>
+                          <div>Source: {lead.source || "—"}</div>
+                          <div>Status: {lead.website_status || "—"}</div>
+                        </div>
+                        <div style={{ marginTop: 12 }}>
                           {lead.website ? (
                             <a href={lead.website} target="_blank" rel="noreferrer" className="badge badge-green" style={{ textDecoration: "none" }}>
                               Visit ↗
                             </a>
                           ) : (
-                            <span className="badge badge-red">None</span>
+                            <span className="badge badge-red">No Website</span>
                           )}
-                        </td>
-                        <td>{lead.website_status || "—"}</td>
-                      </tr>
+                        </div>
+                      </div>
                     ))}
-                  </tbody>
-                </table>
+                  </div>
+                  <table className="data-table desktop-only">
+                    <thead>
+                      <tr>
+                        <th>Name</th>
+                        <th>City</th>
+                        <th>Phone</th>
+                        <th>Email</th>
+                        <th>Source</th>
+                        <th>Website</th>
+                        <th>Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filtered.map((lead) => (
+                        <tr key={lead.id}>
+                          <td>{lead.name || "—"}</td>
+                          <td>{lead.city || "—"}</td>
+                          <td>{lead.phone || "—"}</td>
+                          <td>{lead.email || "—"}</td>
+                          <td>{lead.source || "—"}</td>
+                          <td>
+                            {lead.website ? (
+                              <a href={lead.website} target="_blank" rel="noreferrer" className="badge badge-green" style={{ textDecoration: "none" }}>
+                                Visit ↗
+                              </a>
+                            ) : (
+                              <span className="badge badge-red">None</span>
+                            )}
+                          </td>
+                          <td>{lead.website_status || "—"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </>
               )}
             </div>
           </div>

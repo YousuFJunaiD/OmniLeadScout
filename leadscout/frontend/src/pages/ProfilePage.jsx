@@ -247,9 +247,9 @@ export default function ProfilePage({ user, onLogout }) {
       <SparklesBg />
       <Nav user={user} onLogout={onLogout} />
       <div style={{ paddingTop: 64 }}>
-        <div style={{ maxWidth: 1000, margin: "0 auto", padding: "40px 24px" }}>
+        <div className="profile-page-shell" style={{ maxWidth: 1000, margin: "0 auto", padding: "40px 24px" }}>
 
-          <div className="card card-glow stagger" style={{ marginBottom: 24, display: "flex", alignItems: "center", gap: 24 }}>
+          <div className="card card-glow stagger profile-hero" style={{ marginBottom: 24, display: "flex", alignItems: "center", gap: 24 }}>
             <div style={{ width: 64, height: 64, borderRadius: "50%", background: "linear-gradient(135deg,var(--accent-cyan),var(--accent-violet))", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 24, fontWeight: 800, color: "#020305", flexShrink: 0 }}>
               {user.name?.[0]?.toUpperCase()}
             </div>
@@ -257,7 +257,7 @@ export default function ProfilePage({ user, onLogout }) {
               <h1 style={{ fontSize: 22, fontWeight: 800, letterSpacing: "-0.02em", marginBottom: 4 }}>{user.name}</h1>
               <p style={{ fontSize: 13, color: "var(--text-secondary)" }}>{user.email}</p>
             </div>
-            <div style={{ display: "flex", gap: 24, textAlign: "right" }}>
+            <div className="profile-stats" style={{ display: "flex", gap: 24, textAlign: "right" }}>
               {[["Scrapes", history.length, "var(--accent-cyan)"], ["Total Leads", totalLeads.toLocaleString(), "var(--accent-violet)"], ["Completed", history.filter(h => h.status === "completed").length, "var(--accent-gold)"]].map(([l, v, c], i) => (
                 <div key={i}>
                   <div style={{ fontSize: 28, fontWeight: 800, color: c, fontFamily: "var(--font-mono)" }}>{v}</div>
@@ -268,7 +268,7 @@ export default function ProfilePage({ user, onLogout }) {
           </div>
 
           <div className="card">
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+            <div className="profile-history-toolbar" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
               <p style={{ fontSize: 10, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--text-muted)", marginBottom: 0 }}>Scrape History</p>
               <div style={{ display: "flex", gap: 8 }}>
                 <button className="btn btn-ghost" style={{ padding: "6px 12px", fontSize: 11 }} onClick={() => navigate("/dashboard")}>Start Fresh Scrape</button>
@@ -285,62 +285,101 @@ export default function ProfilePage({ user, onLogout }) {
                 <p style={{ color: "var(--text-muted)", fontSize: 13 }}>No scrapes yet. Launch your first from the dashboard.</p>
               </div>
             ) : (
-              <table className="data-table">
-                <thead><tr><th>Job</th><th>Profession</th><th>Location</th><th>Leads</th><th>Date</th><th>Status</th><th></th></tr></thead>
-                <tbody>
+              <>
+                <div className="mobile-only profile-mobile-list">
                   {history.map((h, i) => (
-                    <tr key={i}>
-                      <td style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--text-muted)" }}>#{h.job_id?.slice(0,8)}</td>
-                      <td>{h.profession || "—"}</td>
-                      <td>{h.location || "—"}</td>
-                      <td style={{ color: "var(--accent-cyan)", fontFamily: "var(--font-mono)", fontWeight: 600 }}>{Number(h.effective_lead_count||0).toLocaleString()}</td>
-                      <td style={{ fontSize: 11 }}>{h.created_at ? new Date(h.created_at).toLocaleDateString() : "—"}</td>
-                      <td><span className={`badge ${h.status==="completed"?"badge-green":h.status==="running"?"badge-cyan":h.status==="stopped"||h.status==="stopping"||h.status==="no_results"?"badge-gold":"badge-red"}`}>{h.status}</span></td>
-                      <td>
-                        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap" }}>
-                          {h.merged_count > 1 && (
-                            <span style={{ fontSize: 10, color: "var(--text-muted)", whiteSpace: "nowrap" }}>
-                              merged {h.merged_count} runs
-                            </span>
-                          )}
-                          {(h.status === "running" || h.status === "stopping") && (
-                            <span style={{ fontSize: 10, color: "var(--text-muted)", whiteSpace: "nowrap" }}>
-                              live {Number(h.processed_areas || 0)}/{Number(getTotalAreas(h) || 0)} areas
-                            </span>
-                          )}
-                          {((h.status==="completed" || h.status==="stopped" || h.status==="no_results") && Number(h.effective_lead_count||0) > 0) && (
-                            <>
-                              <button className="btn btn-ghost" style={{ padding:"4px 12px",fontSize:11 }} onClick={() => viewLeads(h)}>👁 View Data</button>
-                              <button className="btn btn-ghost" style={{ padding:"4px 12px",fontSize:11 }} onClick={() => download(h.job_id,`${h.profession}_${h.job_id?.slice(0,8)}.csv`)}>↓ CSV</button>
-                              <button className="btn btn-ghost" style={{ padding:"4px 12px",fontSize:11, color: "var(--accent-red)" }} onClick={() => deleteJob(h.job_id)}>🗑 Delete</button>
-                            </>
-                          )}
-                          {canResumeFromStopped(h) && (
-                            <button
-                              className="btn btn-ghost"
-                              style={{ padding:"4px 12px",fontSize:11 }}
-                              onClick={() => resumeFromRow(h, false)}
-                              disabled={workingJobId === h.job_id}
-                            >
-                              Resume
-                            </button>
-                          )}
-                          {canResumeFromStopped(h) && (
-                            <button
-                              className="btn btn-ghost"
-                              style={{ padding:"4px 12px",fontSize:11 }}
-                              onClick={() => resumeFromRow(h, true)}
-                              disabled={workingJobId === h.job_id}
-                            >
-                              Restart all
-                            </button>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
+                    <div key={`mobile-${i}`} className="profile-mobile-card">
+                      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
+                        <div style={{ fontWeight: 600, color: "var(--text-primary)" }}>{h.profession || "—"}</div>
+                        <span className={`badge ${h.status==="completed"?"badge-green":h.status==="running"?"badge-cyan":h.status==="stopped"||h.status==="stopping"||h.status==="no_results"?"badge-gold":"badge-red"}`}>{h.status}</span>
+                      </div>
+                      <div className="profile-mobile-meta">
+                        <div>Job: #{h.job_id?.slice(0,8)}</div>
+                        <div>Location: {h.location || "—"}</div>
+                        <div>Leads: {Number(h.effective_lead_count||0).toLocaleString()}</div>
+                        <div>Date: {h.created_at ? new Date(h.created_at).toLocaleDateString() : "—"}</div>
+                      </div>
+                      <div className="profile-job-actions" style={{ display: "flex", gap: 8, justifyContent: "flex-start", flexWrap: "wrap", marginTop: 12 }}>
+                        {((h.status==="completed" || h.status==="stopped" || h.status==="no_results") && Number(h.effective_lead_count||0) > 0) && (
+                          <>
+                            <button className="btn btn-ghost" style={{ padding:"4px 12px",fontSize:11 }} onClick={() => viewLeads(h)}>View Data</button>
+                            <button className="btn btn-ghost" style={{ padding:"4px 12px",fontSize:11 }} onClick={() => download(h.job_id,`${h.profession}_${h.job_id?.slice(0,8)}.csv`)}>CSV</button>
+                            <button className="btn btn-ghost" style={{ padding:"4px 12px",fontSize:11, color: "var(--accent-red)" }} onClick={() => deleteJob(h.job_id)}>Delete</button>
+                          </>
+                        )}
+                        {canResumeFromStopped(h) && (
+                          <button className="btn btn-ghost" style={{ padding:"4px 12px",fontSize:11 }} onClick={() => resumeFromRow(h, false)} disabled={workingJobId === h.job_id}>
+                            Resume
+                          </button>
+                        )}
+                        {canResumeFromStopped(h) && (
+                          <button className="btn btn-ghost" style={{ padding:"4px 12px",fontSize:11 }} onClick={() => resumeFromRow(h, true)} disabled={workingJobId === h.job_id}>
+                            Restart all
+                          </button>
+                        )}
+                      </div>
+                    </div>
                   ))}
-                </tbody>
-              </table>
+                </div>
+                <div className="desktop-only table-wrap">
+                  <table className="data-table">
+                    <thead><tr><th>Job</th><th>Profession</th><th>Location</th><th>Leads</th><th>Date</th><th>Status</th><th></th></tr></thead>
+                    <tbody>
+                      {history.map((h, i) => (
+                        <tr key={i}>
+                          <td style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--text-muted)" }}>#{h.job_id?.slice(0,8)}</td>
+                          <td>{h.profession || "—"}</td>
+                          <td>{h.location || "—"}</td>
+                          <td style={{ color: "var(--accent-cyan)", fontFamily: "var(--font-mono)", fontWeight: 600 }}>{Number(h.effective_lead_count||0).toLocaleString()}</td>
+                          <td style={{ fontSize: 11 }}>{h.created_at ? new Date(h.created_at).toLocaleDateString() : "—"}</td>
+                          <td><span className={`badge ${h.status==="completed"?"badge-green":h.status==="running"?"badge-cyan":h.status==="stopped"||h.status==="stopping"||h.status==="no_results"?"badge-gold":"badge-red"}`}>{h.status}</span></td>
+                          <td>
+                            <div className="profile-job-actions" style={{ display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap" }}>
+                              {h.merged_count > 1 && (
+                                <span style={{ fontSize: 10, color: "var(--text-muted)", whiteSpace: "nowrap" }}>
+                                  merged {h.merged_count} runs
+                                </span>
+                              )}
+                              {(h.status === "running" || h.status === "stopping") && (
+                                <span style={{ fontSize: 10, color: "var(--text-muted)", whiteSpace: "nowrap" }}>
+                                  live {Number(h.processed_areas || 0)}/{Number(getTotalAreas(h) || 0)} areas
+                                </span>
+                              )}
+                              {((h.status==="completed" || h.status==="stopped" || h.status==="no_results") && Number(h.effective_lead_count||0) > 0) && (
+                                <>
+                                  <button className="btn btn-ghost" style={{ padding:"4px 12px",fontSize:11 }} onClick={() => viewLeads(h)}>👁 View Data</button>
+                                  <button className="btn btn-ghost" style={{ padding:"4px 12px",fontSize:11 }} onClick={() => download(h.job_id,`${h.profession}_${h.job_id?.slice(0,8)}.csv`)}>↓ CSV</button>
+                                  <button className="btn btn-ghost" style={{ padding:"4px 12px",fontSize:11, color: "var(--accent-red)" }} onClick={() => deleteJob(h.job_id)}>🗑 Delete</button>
+                                </>
+                              )}
+                              {canResumeFromStopped(h) && (
+                                <button
+                                  className="btn btn-ghost"
+                                  style={{ padding:"4px 12px",fontSize:11 }}
+                                  onClick={() => resumeFromRow(h, false)}
+                                  disabled={workingJobId === h.job_id}
+                                >
+                                  Resume
+                                </button>
+                              )}
+                              {canResumeFromStopped(h) && (
+                                <button
+                                  className="btn btn-ghost"
+                                  style={{ padding:"4px 12px",fontSize:11 }}
+                                  onClick={() => resumeFromRow(h, true)}
+                                  disabled={workingJobId === h.job_id}
+                                >
+                                  Restart all
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
             )}
           </div>
         </div>
@@ -348,7 +387,7 @@ export default function ProfilePage({ user, onLogout }) {
 
       {viewingJob && (
         <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "var(--bg-void)", zIndex: 1000, display: "flex", flexDirection: "column" }} className="anim-fade-in">
-          <div style={{ padding: "20px 40px", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center", background: "var(--bg-deep)" }}>
+          <div className="profile-modal-header" style={{ padding: "20px 40px", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center", background: "var(--bg-deep)" }}>
             <div>
               <h2 style={{ fontSize: 20, fontWeight: 800, letterSpacing: "-0.02em" }}>Data Explorer</h2>
               <p style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 4 }}>
@@ -366,7 +405,8 @@ export default function ProfilePage({ user, onLogout }) {
             ) : viewingLeads.length === 0 ? (
               <div style={{ textAlign: "center", padding: 60, color: "var(--text-muted)" }}>No data available.</div>
             ) : (
-              <table className="data-table">
+              <div className="table-wrap">
+                <table className="data-table">
                 <thead><tr><th>Business</th><th>Phone</th><th>Owner</th><th>Email</th><th>Website</th><th>Socials</th></tr></thead>
                 <tbody>
                   {viewingLeads.map((lead, i) => (
@@ -400,7 +440,8 @@ export default function ProfilePage({ user, onLogout }) {
                     </tr>
                   ))}
                 </tbody>
-              </table>
+                </table>
+              </div>
             )}
           </div>
         </div>

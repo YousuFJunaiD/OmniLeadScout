@@ -56,7 +56,7 @@ export default function SignupPage({ onLogin }) {
   }
 
   return (
-    <div className="page" style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "100vh", background: "#000" }}>
+    <div className="page auth-shell" style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "100vh", background: "#000" }}>
       <SparklesBg />
 
       <div style={{ width: "100%", maxWidth: 420, padding: "0 24px", zIndex: 1 }} className="anim-fade-up">
@@ -70,7 +70,7 @@ export default function SignupPage({ onLogin }) {
         </Link>
 
         {/* Card */}
-        <div style={{ border: "1px solid rgba(255,255,255,0.14)", background: "#0A0A0A", padding: "36px 32px" }}>
+        <div className="auth-card-shell" style={{ border: "1px solid rgba(255,255,255,0.14)", background: "#0A0A0A", padding: "36px 32px" }}>
 
           <div style={{ marginBottom: 28 }}>
             <h2 style={{ fontSize: 20, fontWeight: 800, letterSpacing: "0.04em", textTransform: "uppercase", color: "#fff", marginBottom: 6 }}>

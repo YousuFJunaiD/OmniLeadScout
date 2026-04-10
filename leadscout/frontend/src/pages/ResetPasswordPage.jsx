@@ -96,7 +96,7 @@ export default function ResetPasswordPage() {
     : { border: "1px solid rgba(255,110,110,0.28)", background: "rgba(255,110,110,0.08)", color: "rgba(255,185,185,0.96)" }
 
   return (
-    <div className="page" style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "100vh", background: "#000" }}>
+    <div className="page auth-shell" style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "100vh", background: "#000" }}>
       <SparklesBg />
       <div style={{ width: "100%", maxWidth: 420, padding: "0 24px", zIndex: 1 }} className="anim-fade-up">
         <Link to="/" style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8, marginBottom: 44, textDecoration: "none" }}>
@@ -106,7 +106,7 @@ export default function ResetPasswordPage() {
           </span>
         </Link>
 
-        <div style={{ border: "1px solid rgba(255,255,255,0.14)", background: "#0A0A0A", padding: "36px 32px" }}>
+        <div className="auth-card-shell" style={{ border: "1px solid rgba(255,255,255,0.14)", background: "#0A0A0A", padding: "36px 32px" }}>
           <div style={{ marginBottom: 28 }}>
             <h2 style={{ fontSize: 20, fontWeight: 800, letterSpacing: "0.04em", textTransform: "uppercase", color: "#fff", marginBottom: 6 }}>
               {isResetMode ? "Choose a new password" : "Reset your password"}

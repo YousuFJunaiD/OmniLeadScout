@@ -51,7 +51,7 @@ export default function AdminPage({ user, onLogout }) {
       <SparklesBg />
       <Nav user={user} onLogout={onLogout} />
       <div style={{ paddingTop: 64 }}>
-        <div style={{ maxWidth: 1080, margin: "0 auto", padding: "40px 24px 80px" }}>
+        <div className="admin-page-shell" style={{ maxWidth: 1080, margin: "0 auto", padding: "40px 24px 80px" }}>
           {!isAdmin ? (
             <div className="card" style={{ textAlign: "center" }}>
               <span className="badge badge-red" style={{ marginBottom: 12, display: "inline-block" }}>Access Denied</span>
@@ -80,32 +80,50 @@ export default function AdminPage({ user, onLogout }) {
               ) : error ? (
                 <div style={{ color: "var(--accent-red)" }}>{error}</div>
               ) : (
-                <div className="table-wrap">
-                  <table className="data-table">
-                    <thead>
-                      <tr>
-                        <th>Name</th>
-                        <th>Email</th>
-                        <th>Plan</th>
-                        <th>Role</th>
-                        <th>Jobs</th>
-                        <th>Total Leads</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {users.map((row) => (
-                        <tr key={row.id}>
-                          <td>{row.name || "—"}</td>
-                          <td>{row.email || "—"}</td>
-                          <td>{row.plan || "starter"}</td>
-                          <td><span className={`badge ${row.role === "admin" ? "badge-cyan" : "badge-gold"}`}>{row.role || "user"}</span></td>
-                          <td>{row.job_count || 0}</td>
-                          <td>{row.total_leads || 0}</td>
+                <>
+                  <div className="mobile-only admin-mobile-list">
+                    {users.map((row) => (
+                      <div key={`mobile-${row.id}`} className="admin-mobile-card">
+                        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
+                          <div style={{ fontWeight: 600, color: "var(--text-primary)" }}>{row.name || "—"}</div>
+                          <span className={`badge ${row.role === "admin" ? "badge-cyan" : "badge-gold"}`}>{row.role || "user"}</span>
+                        </div>
+                        <div className="admin-mobile-meta">
+                          <div>Email: {row.email || "—"}</div>
+                          <div>Plan: {row.plan || "starter"}</div>
+                          <div>Jobs: {row.job_count || 0}</div>
+                          <div>Total Leads: {row.total_leads || 0}</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="table-wrap desktop-only">
+                    <table className="data-table">
+                      <thead>
+                        <tr>
+                          <th>Name</th>
+                          <th>Email</th>
+                          <th>Plan</th>
+                          <th>Role</th>
+                          <th>Jobs</th>
+                          <th>Total Leads</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                      </thead>
+                      <tbody>
+                        {users.map((row) => (
+                          <tr key={row.id}>
+                            <td>{row.name || "—"}</td>
+                            <td>{row.email || "—"}</td>
+                            <td>{row.plan || "starter"}</td>
+                            <td><span className={`badge ${row.role === "admin" ? "badge-cyan" : "badge-gold"}`}>{row.role || "user"}</span></td>
+                            <td>{row.job_count || 0}</td>
+                            <td>{row.total_leads || 0}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
               )}
             </div>
           )}

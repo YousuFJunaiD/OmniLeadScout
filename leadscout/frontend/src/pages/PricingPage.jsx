@@ -395,7 +395,7 @@ export default function PricingPage({ user, onPlanSelected }) {
       </div>
 
       {/* ── Hero ───────────────────���─────────────────────────────────────── */}
-      <div style={{ ...S.section, paddingTop: 72, paddingBottom: 56, textAlign: "center" }}>
+      <div className="pricing-section" style={{ ...S.section, paddingTop: 72, paddingBottom: 56, textAlign: "center" }}>
         <p style={{ ...S.label, marginBottom: 16 }}>Pricing</p>
         <h1 style={{ ...S.h2, fontSize: "clamp(32px,5vw,54px)", marginBottom: 16 }}>
           Simple, transparent pricing.
@@ -410,7 +410,7 @@ export default function PricingPage({ user, onPlanSelected }) {
         )}
 
         {/* Billing toggle */}
-        <div style={{ display: "inline-flex", alignItems: "center", gap: 0 }}>
+        <div className="pricing-billing-toggle" style={{ display: "inline-flex", alignItems: "center", gap: 0, flexWrap: "wrap", justifyContent: "center" }}>
           <button style={S.toggle(billing === "monthly")} onClick={() => setBilling("monthly")}>Monthly</button>
           <button style={{ ...S.toggle(billing === "annual"), borderLeft: "none" }} onClick={() => setBilling("annual")}>
             Annual
@@ -422,8 +422,8 @@ export default function PricingPage({ user, onPlanSelected }) {
       </div>
 
       {/* ── Plans ────────────────────────────���───────────────────────────── */}
-      <div style={S.section}>
-        <div style={S.planGrid}>
+      <div className="pricing-section" style={S.section}>
+        <div className="pricing-plan-grid" style={S.planGrid}>
           {PLANS.map((plan) => (
             <div key={plan.id} style={S.card(plan.popular)}>
 
@@ -505,7 +505,7 @@ export default function PricingPage({ user, onPlanSelected }) {
       </div>
 
       {/* ── Add-ons ───────────────────────────────────────────────────────── */}
-      <div style={{ ...S.section, paddingTop: 80, paddingBottom: 20 }}>
+      <div className="pricing-section" style={{ ...S.section, paddingTop: 80, paddingBottom: 20 }}>
         <div style={{ marginBottom: 36 }}>
           <p style={{ ...S.label, marginBottom: 12 }}>Power-ups</p>
           <h2 style={{ ...S.h2, fontSize: "clamp(22px,3vw,32px)", marginBottom: 8 }}>Power-ups for every plan</h2>
@@ -550,7 +550,7 @@ export default function PricingPage({ user, onPlanSelected }) {
 
       {/* ── Enterprise contact form ───────────────────────────────────────── */}
       {showContact && (
-        <div id="contact-section" style={{ ...S.section, paddingTop: 60, paddingBottom: 20 }}>
+        <div id="contact-section" className="pricing-section" style={{ ...S.section, paddingTop: 60, paddingBottom: 20 }}>
           <div style={{ border: "1px solid rgba(255,255,255,0.18)", padding: "40px 36px", maxWidth: 600 }}>
             <p style={{ ...S.label, marginBottom: 12 }}>Enterprise</p>
             <h2 style={{ fontSize: 24, fontWeight: 800, letterSpacing: "-0.02em", color: "#fff", marginBottom: 6 }}>Contact Sales</h2>
@@ -565,7 +565,7 @@ export default function PricingPage({ user, onPlanSelected }) {
               </div>
             ) : (
               <form onSubmit={submitContact} style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+                <div className="pricing-contact-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
                   <div>
                     <label>Name</label>
                     <input style={S.input} placeholder="Your name" value={contact.name} onChange={e => setContact(c => ({ ...c, name: e.target.value }))} required />
@@ -593,7 +593,7 @@ export default function PricingPage({ user, onPlanSelected }) {
       )}
 
       {/* ── FAQ ───────────────────────────────────────────────────────────── */}
-      <div style={{ ...S.section, paddingTop: 80, paddingBottom: 100 }}>
+      <div className="pricing-section" style={{ ...S.section, paddingTop: 80, paddingBottom: 100 }}>
         <div style={{ marginBottom: 40 }}>
           <p style={{ ...S.label, marginBottom: 12 }}>FAQ</p>
           <h2 style={{ ...S.h2, fontSize: "clamp(22px,3vw,32px)" }}>Common questions</h2>
@@ -623,21 +623,21 @@ export default function PricingPage({ user, onPlanSelected }) {
       </div>
 
       {/* ── Footer ───────���───────────────────────────────────────────────── */}
-      <footer style={{ borderTop: "1px solid rgba(255,255,255,0.08)", padding: "24px 40px", display: "flex", justifyContent: "space-between", alignItems: "center", color: "rgba(255,255,255,0.22)", fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", fontFamily: "var(--font-mono)" }}>
+      <footer className="pricing-footer" style={{ borderTop: "1px solid rgba(255,255,255,0.08)", padding: "24px 40px", display: "flex", justifyContent: "space-between", alignItems: "center", color: "rgba(255,255,255,0.22)", fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", fontFamily: "var(--font-mono)" }}>
         <span>LeadScout — Universal lead intelligence</span>
         <span>Powered by OMNIMATE</span>
       </footer>
 
       {/* ── Sticky add-ons bar ────────────────────────────────────────────── */}
       {selected.size > 0 && (
-        <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 200, background: "#010308", borderTop: "1px solid rgba(255,255,255,0.12)", padding: "14px 32px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div className="pricing-sticky-bar" style={{ position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 200, background: "#010308", borderTop: "1px solid rgba(255,255,255,0.12)", padding: "14px 32px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <span style={{ fontSize: 13, color: "#fff", fontWeight: 600, letterSpacing: "0.03em" }}>
             <strong>{selected.size}</strong> add-on{selected.size > 1 ? "s" : ""} selected
             &nbsp;·&nbsp;
             Total: <strong>₹{addonTotal.toLocaleString("en-IN")}</strong>
             <span style={{ fontSize: 11, fontWeight: 400, color: "rgba(255,255,255,0.5)", marginLeft: 2 }}>/mo</span>
           </span>
-          <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+          <div className="pricing-sticky-actions" style={{ display: "flex", gap: 10, alignItems: "center" }}>
             <button
               onClick={() => setSelected(new Set())}
               style={{ fontSize: 11, background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.12)", color: "rgba(255,255,255,0.62)", padding: "7px 14px", cursor: "pointer", letterSpacing: "0.08em", textTransform: "uppercase", fontFamily: "var(--font-display)", fontWeight: 600 }}
