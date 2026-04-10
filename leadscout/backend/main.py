@@ -130,7 +130,7 @@ async def job_worker_loop(worker_id: int):
                     continue
                     
                 job["status"] = "running"
-                job["progress_message"] = "Worker started"
+                job["progress_message"] = "Searching sources..."
                 try:
                     update_job_db(job_id, "running", job.get("lead_count", 0))
                     update_scrape_job(job_id, status="running", leads_found=int(job.get("lead_count", 0)))
@@ -620,12 +620,34 @@ def publish_event(job: dict, message: dict):
         job.get("listeners", set()).discard(q)
 
 
-def resolve_final_job_status(cancelled: bool, accepted_leads: int) -> str:
+def resolve_final_job_status(cancelled: bool, total_found: int, accepted_leads: int, source_failures: list[str] | None = None) -> str:
     if cancelled:
         return "stopped"
-    if int(accepted_leads or 0) <= 0:
+    total_found = int(total_found or 0)
+    accepted_leads = int(accepted_leads or 0)
+    if total_found <= 0 and accepted_leads <= 0 and source_failures:
+        return "source_error"
+    if total_found <= 0 and accepted_leads <= 0:
         return "no_results"
+    if total_found > 0 and accepted_leads <= 0:
+        return "low_data"
     return "completed"
+
+
+def final_status_message(status: str) -> str:
+    if status == "completed":
+        return "Saving leads complete."
+    if status == "no_results":
+        return "No data found. Try broader query or different location."
+    if status == "low_data":
+        return "Low data found. Results were filtered out. Try broader query or different location."
+    if status == "source_error":
+        return "Source timeout or block detected. Try broader query or different location."
+    if status == "stopped":
+        return "Scrape stopped."
+    if status == "failed":
+        return "Scrape failed. Try broader query or different location."
+    return "Scrape finished."
 
 
 async def run_job(job_id: str):
@@ -647,6 +669,8 @@ async def run_job(job_id: str):
         seen = load_seen_leads()
         total = len(areas)
         accepted_leads = 0
+        raw_found = 0
+        source_failures: list[str] = []
         completed_indexes = set()
         csv_path = build_job_csv_path(niche, job_id)
         pending_rows = []
@@ -709,6 +733,9 @@ async def run_job(job_id: str):
                 })
 
                 finished_naturally = False
+                area_raw_found = 0
+                area_saved = 0
+                failure_reason = ""
                 try:
                     recovery_attempt = 0
                     while not job.get("cancelled") and recovery_attempt < BLOCK_RECOVERY_MAX_ATTEMPTS:
@@ -725,6 +752,7 @@ async def run_job(job_id: str):
 
                             if evt_type == "lead":
                                 lead = evt_data or {}
+                                area_raw_found += 1
                                 lead["Search Query"] = query
                                 maps_url = lead.get("Maps URL", "")
                                 website_url = lead.get("Website", "")
@@ -739,6 +767,7 @@ async def run_job(job_id: str):
                                         should_publish = True
 
                                 if should_publish:
+                                    area_saved += 1
                                     publish_event(job, {"type": "lead", "data": lead})
                                     publish_event(job, {
                                         "type": "url",
@@ -751,6 +780,7 @@ async def run_job(job_id: str):
                             elif evt_type == "blocked":
                                 blocked_detected = True
                                 blocked_reason = str((evt_data or {}).get("reason") or blocked_reason)
+                                failure_reason = blocked_reason
                                 got_terminal_event = True
                                 break
                             elif evt_type == "error":
@@ -758,7 +788,9 @@ async def run_job(job_id: str):
                                 if "blocked" in msg.lower() or "captcha" in msg.lower() or "unusual traffic" in msg.lower():
                                     blocked_detected = True
                                     blocked_reason = msg
+                                    failure_reason = msg
                                 else:
+                                    failure_reason = msg
                                     publish_event(job, {"type": "info", "data": msg})
                                 got_terminal_event = True
                                 break
@@ -795,6 +827,7 @@ async def run_job(job_id: str):
                         break
 
                     if not finished_naturally and recovery_attempt >= BLOCK_RECOVERY_MAX_ATTEMPTS:
+                        failure_reason = f"blocked after {BLOCK_RECOVERY_MAX_ATTEMPTS} recovery attempts"
                         publish_event(job, {
                             "type": "error",
                             "data": (
@@ -804,6 +837,9 @@ async def run_job(job_id: str):
                         })
                 finally:
                     async with state_lock:
+                        raw_found += area_raw_found
+                        if failure_reason:
+                            source_failures.append(f"{query}: {failure_reason}")
                         if finished_naturally and not job.get("cancelled"):
                             completed_indexes.add(i)
                         processed_areas = len(completed_indexes)
@@ -814,6 +850,14 @@ async def run_job(job_id: str):
                             (processed_areas, json.dumps(sorted(completed_indexes)), job_id),
                         )
                         conn.commit()
+                    logging.info(
+                        "Scrape V1 area query=%s location=%s platform=google_maps raw_found=%s leads_saved=%s failure_reason=%s",
+                        profession,
+                        area,
+                        area_raw_found,
+                        area_saved,
+                        failure_reason or "-",
+                    )
                     area_queue.task_done()
 
         worker_count = min(AREA_CONCURRENCY, total) if total > 0 else 1
@@ -823,15 +867,18 @@ async def run_job(job_id: str):
         flush_pending(force_save_seen=True)
         save_seen_leads(seen)
 
-        final_status = resolve_final_job_status(job.get("cancelled"), accepted_leads)
+        final_status = resolve_final_job_status(job.get("cancelled"), raw_found, accepted_leads, source_failures)
+        job["progress_message"] = final_status_message(final_status)
         logging.info(
-            "Scrape V1 finished user=%s job=%s status=%s saved_leads=%s processed_areas=%s/%s",
+            "Scrape V1 finished user=%s job=%s status=%s raw_found=%s saved_leads=%s processed_areas=%s/%s failure_reason=%s",
             user_id,
             job_id,
             final_status,
+            raw_found,
             accepted_leads,
             job.get("processed_areas", 0),
             total,
+            " | ".join(source_failures) if source_failures else "-",
         )
 
         generated = generate_job_csv_from_db(job_id, niche)
@@ -854,6 +901,8 @@ async def run_job(job_id: str):
                 "total": accepted_leads,
                 "status": final_status,
                 "job_id": job_id,
+                "raw_found": raw_found,
+                "message": job["progress_message"],
             },
         })
     except Exception as e:
@@ -1357,12 +1406,15 @@ async def run_job_v2(job_id: str):
         pending_rows: list = []
         accepted_leads = 0
         current_step = 0
+        total_raw_found = 0
+        source_failures: list[str] = []
         seen_runtime_keys: set[str] = set()
 
         def flush_pending():
             nonlocal accepted_leads, pending_rows
             if not pending_rows:
                 return
+            publish_event(job, {"type": "info", "data": "Saving leads..."})
             lead_payloads = []
             for _, _, data in pending_rows:
                 try:
@@ -1401,14 +1453,22 @@ async def run_job_v2(job_id: str):
         async def run_scrape_item(platform_name: str, query: str, scraper_fn):
             async with scrape_semaphore:
                 if job.get("cancelled"):
-                    return platform_name, query, []
+                    return platform_name, query, [], ""
                 try:
+                    logging.info(
+                        "Scrape V2 item start query=%s location=%s platform=%s",
+                        query,
+                        city,
+                        platform_name,
+                    )
                     await asyncio.sleep(random.uniform(0.5, 1.2))
                     results = await scraper_fn(query, city, max_per_query, _get_proxy())
-                    return platform_name, query, results
+                    return platform_name, query, results, ""
                 except Exception as e:
+                    error_text = str(e)
+                    source_failures.append(f"{platform_name}:{query}:{error_text}")
                     publish_event(job, {"type": "info", "data": f"[{platform_name}] Error: {e}"})
-                    return platform_name, query, []
+                    return platform_name, query, [], error_text
 
         def to_lead_dict(lead: Lead):
             d = _asdict(lead)
@@ -1437,6 +1497,7 @@ async def run_job_v2(job_id: str):
             batch_started = time.perf_counter()
             for platform_name, query, _ in batch:
                 label = f"{query} in {city}  [{platform_name}]"
+                publish_event(job, {"type": "info", "data": "Searching sources..."})
                 publish_event(job, {"type": "progress", "data": {
                     "current": current_step, "total": total_steps, "query": label,
                 }})
@@ -1447,11 +1508,15 @@ async def run_job_v2(job_id: str):
 
             batch_leads: list[Lead] = []
             raw_count = 0
-            for platform_name, query, results in batch_results:
+            kept_by_item: dict[tuple[str, str], int] = {}
+            for platform_name, query, results, failure_reason in batch_results:
                 raw_count += len(results)
+                total_raw_found += len(results)
                 current_step += 1
                 label = f"{query} in {city}  [{platform_name}]"
                 publish_event(job, {"type": "info", "data": f"[{platform_name}] {len(results)} leads for '{query}'"})
+                if failure_reason:
+                    publish_event(job, {"type": "info", "data": f"[{platform_name}] Source issue: {failure_reason}"})
                 publish_event(job, {"type": "progress", "data": {
                     "current": current_step, "total": total_steps, "query": label,
                 }})
@@ -1462,7 +1527,7 @@ async def run_job_v2(job_id: str):
 
             publish_event(job, {
                 "type": "info",
-                "data": f"Checking websites for batch of {len(batch_leads)} leads…",
+                "data": "Processing results...",
             })
             await async_enrich_websites(
                 batch_leads,
@@ -1486,6 +1551,8 @@ async def run_job_v2(job_id: str):
                 pending_rows.append((job_id, user_id, json.dumps(lead_dict)))
                 publish_event(job, {"type": "lead", "data": lead_dict})
                 kept_this_batch += 1
+                key = (lead_dict.get("source") or "", lead_dict.get("query") or "")
+                kept_by_item[key] = kept_by_item.get(key, 0) + 1
                 if len(pending_rows) >= DB_FLUSH_EVERY:
                     flush_pending()
                 await asyncio.sleep(0)
@@ -1497,6 +1564,22 @@ async def run_job_v2(job_id: str):
                 f"time={batch_seconds:.2f}s | leads_collected={kept_this_batch}"
             )
             logging.info(batch_log)
+            platform_source_key = {
+                "Maps": "google_maps",
+                "JustDial": "justdial",
+                "IndiaMart": "indiamart",
+            }
+            for platform_name, query, results, failure_reason in batch_results:
+                saved_for_item = kept_by_item.get((platform_source_key.get(platform_name, ""), query), 0)
+                logging.info(
+                    "Scrape V2 item final query=%s location=%s platform=%s raw_found=%s leads_saved=%s failure_reason=%s",
+                    query,
+                    city,
+                    platform_name,
+                    len(results),
+                    saved_for_item,
+                    failure_reason or "-",
+                )
             publish_event(job, {
                 "type": "info",
                 "data": f"{batch_log} | raw_scraped={raw_count}",
@@ -1511,15 +1594,18 @@ async def run_job_v2(job_id: str):
         except Exception:
             pass
 
-        final_status = resolve_final_job_status(job.get("cancelled"), accepted_leads)
+        final_status = resolve_final_job_status(job.get("cancelled"), total_raw_found, accepted_leads, source_failures)
+        job["progress_message"] = final_status_message(final_status)
         logging.info(
-            "Scrape V2 finished user=%s job=%s status=%s saved_leads=%s city=%s queries=%s",
+            "Scrape V2 finished user=%s job=%s status=%s city=%s queries=%s raw_found=%s saved_leads=%s failure_reason=%s",
             user_id,
             job_id,
             final_status,
-            accepted_leads,
             city,
             queries,
+            total_raw_found,
+            accepted_leads,
+            " | ".join(source_failures) if source_failures else "-",
         )
         update_job_db(job_id, final_status, accepted_leads, csv_path)
         try:
@@ -1534,7 +1620,7 @@ async def run_job_v2(job_id: str):
 
         publish_event(job, {
             "type": "done",
-            "data": {"total": accepted_leads, "status": final_status, "job_id": job_id},
+            "data": {"total": accepted_leads, "status": final_status, "job_id": job_id, "raw_found": total_raw_found, "message": job["progress_message"]},
         })
 
     except Exception as e:
@@ -2130,7 +2216,7 @@ def scrape_status(job_id: str, current_user=Depends(get_current_user)):
         "processed_areas": row["processed_areas"] or 0,
         "total_areas": row["total_areas"] or 0,
         "current_query": "",
-        "progress_message": "Job finished" if status in ("completed", "stopped", "failed", "no_results") else "Waiting for worker",
+        "progress_message": final_status_message(status) if status in ("completed", "stopped", "failed", "no_results", "low_data", "source_error") else "Waiting for worker",
         "recent_events": [],
         "running": False,
         "csv_path": row["csv_path"],

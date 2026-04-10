@@ -522,8 +522,21 @@ export default function DashboardPage({ user, onLogout }) {
   const getStatusBadgeClass = (status) => {
     if (status === "completed") return "badge-green"
     if (status === "running") return "badge-cyan"
-    if (status === "stopping" || status === "stopped" || status === "no_results") return "badge-gold"
+    if (status === "stopping" || status === "stopped" || status === "no_results" || status === "low_data") return "badge-gold"
     return "badge-red"
+  }
+
+  const getStatusMessage = (status, fallback = "") => {
+    if (fallback) return fallback
+    if (status === "pending") return "Initializing..."
+    if (status === "running") return "Searching sources..."
+    if (status === "completed") return "Saving leads complete."
+    if (status === "no_results") return "No data found. Try broader query or different location."
+    if (status === "low_data") return "Low data found. Try broader query or different location."
+    if (status === "source_error") return "Source timeout or block detected. Try broader query or different location."
+    if (status === "failed") return "Scrape failed. Try broader query or different location."
+    if (status === "stopped") return "Scrape stopped."
+    return fallback || status
   }
 
   const pushFeedMessage = (text, tone = "info") => {
@@ -543,9 +556,10 @@ export default function DashboardPage({ user, onLogout }) {
       query: status.current_query || prev.query || "",
     }))
     setRuntimeStatus(
-      status.progress_message ||
-      status.current_query ||
-      (status.status === "pending" ? "Queued for worker…" : status.status)
+      getStatusMessage(
+        status.status,
+        status.progress_message || status.current_query || (status.status === "pending" ? "Queued for worker…" : "")
+      )
     )
     if (typeof status.lead_count === "number") {
       setStats((prev) => ({
@@ -817,18 +831,17 @@ export default function DashboardPage({ user, onLogout }) {
         keepSocketAliveRef.current = false
         setScraping(false)
         setCanDownload((msg.data?.total || 0) > 0)
-        setRuntimeStatus(
-          msg.data?.status === "no_results"
-            ? "Scrape finished, but no leads were saved."
-            : msg.data?.status === "stopped"
-              ? "Scrape stopped."
-              : "Completed"
-        )
+        setRuntimeStatus(getStatusMessage(msg.data?.status, msg.data?.message || ""))
         clearActiveJob()
         refreshResumeCandidate()
         refreshHistory()
         refreshUsage()
-        pushFeedMessage(msg.data?.status === "no_results" ? "Finished with no saved leads." : "Scrape finished.")
+        pushFeedMessage(
+          msg.data?.status === "completed"
+            ? "Scrape finished."
+            : getStatusMessage(msg.data?.status, msg.data?.message || ""),
+          msg.data?.status === "completed" ? "info" : msg.data?.status === "low_data" ? "warn" : "error"
+        )
       } else if (msg.type === "error") {
         flushLiveFeed()
         keepSocketAliveRef.current = false
@@ -1195,8 +1208,8 @@ export default function DashboardPage({ user, onLogout }) {
           keepSocketAliveRef.current = false
           setScraping(false)
           setCanDownload((status.lead_count || 0) > 0)
-          if (!["completed", "stopped", "failed", "no_results"].includes(status.status)) {
-            setRuntimeStatus(status.progress_message || "Job finished.")
+          if (!["completed", "stopped", "failed", "no_results", "low_data", "source_error"].includes(status.status)) {
+            setRuntimeStatus(getStatusMessage(status.status, status.progress_message || "Job finished."))
           }
           clearActiveJob()
           refreshHistory()
@@ -1502,7 +1515,7 @@ export default function DashboardPage({ user, onLogout }) {
                   <div className="dashboard-progress-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                       {scraping && <span className="stat-pill"><span className="dot" /> Running</span>}
-                      <span style={{ fontSize: 13, color: "var(--text-secondary)" }}>{progress.query || "Initializing..."}</span>
+                      <span style={{ fontSize: 13, color: "var(--text-secondary)" }}>{progress.query || runtimeStatus || "Initializing..."}</span>
                     </div>
                     <span style={{ fontSize: 13, fontFamily: "var(--font-mono)", color: "var(--accent-cyan)" }}>{progress.current}/{progress.total}</span>
                   </div>
