@@ -9,6 +9,7 @@ import os
 import re
 import time
 import traceback
+import random
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -29,8 +30,8 @@ MAPS_DEBUG_DIR = Path(os.getenv("LEADSCOUT_MAPS_DEBUG_DIR", str(Path(__file__).p
 MAPS_DEBUG_DIR.mkdir(parents=True, exist_ok=True)
 MAPS_TIMEZONE = os.getenv("LEADSCOUT_MAPS_TIMEZONE", "Asia/Kolkata")
 MAPS_LOCALE = os.getenv("LEADSCOUT_MAPS_LOCALE", "en-IN")
+MAPS_HEADLESS = os.getenv("LEADSCOUT_MAPS_HEADLESS", "0").strip().lower() in {"1", "true", "yes"}
 MAPS_LAUNCH_ARGS = [
-    "--headless=new",
     "--no-sandbox",
     "--disable-setuid-sandbox",
     "--disable-dev-shm-usage",
@@ -104,6 +105,10 @@ def _emit_worker_progress(progress_callback, payload: dict):
         progress_callback(payload)
 
 
+async def _human_pause(min_ms: int = 600, max_ms: int = 1400):
+    await asyncio.sleep(random.uniform(min_ms / 1000, max_ms / 1000))
+
+
 def _proxy_server(proxy_dict) -> Optional[str]:
     if not proxy_dict:
         return None
@@ -174,6 +179,11 @@ async def _dom_markers(page) -> dict:
     }
 
 
+def _has_results_markers(markers: Optional[dict]) -> bool:
+    markers = markers or {}
+    return bool(markers.get("has_feed") or markers.get("has_result_links") or int(markers.get("result_link_count") or 0) > 0)
+
+
 async def _dismiss_consent(page) -> bool:
     for txt in CONSENT_BUTTONS:
         try:
@@ -187,6 +197,72 @@ async def _dismiss_consent(page) -> bool:
     return False
 
 
+async def _dismiss_signin_overlay(page) -> bool:
+    candidates = [
+        ("button", "Not now"),
+        ("button", "Skip"),
+        ("button", "Close"),
+        ("button", "No thanks"),
+    ]
+    for role, label in candidates:
+        try:
+            locator = page.get_by_role(role, name=label)
+            if await locator.count():
+                await locator.first.click(timeout=2000)
+                await _human_pause(700, 1200)
+                return True
+        except Exception:
+            pass
+
+    close_selectors = [
+        'button[aria-label="Close"]',
+        'button[aria-label="close"]',
+        'button[jsaction*="close"]',
+        'div[role="dialog"] button[aria-label*="Close"]',
+        'div[role="dialog"] svg',
+    ]
+    for selector in close_selectors:
+        try:
+            locator = page.locator(selector)
+            if await locator.count():
+                await locator.first.click(timeout=1500)
+                await _human_pause(700, 1200)
+                return True
+        except Exception:
+            pass
+
+    try:
+        removed = await page.evaluate(
+            """
+            () => {
+              const selectors = [
+                'div[role="dialog"]',
+                'div[aria-modal="true"]',
+                'div[aria-label*="Sign in"]',
+                'div[jscontroller][role="dialog"]'
+              ];
+              let removedCount = 0;
+              for (const selector of selectors) {
+                for (const node of document.querySelectorAll(selector)) {
+                  node.remove();
+                  removedCount += 1;
+                }
+              }
+              document.body.classList.remove('overflow-hidden');
+              document.body.style.overflow = 'auto';
+              document.documentElement.style.overflow = 'auto';
+              return removedCount;
+            }
+            """
+        )
+        if removed:
+            await _human_pause(700, 1200)
+            return True
+    except Exception:
+        pass
+    return False
+
+
 async def _wait_for_results_ready(page) -> tuple[bool, dict]:
     start = time.perf_counter()
     last_markers = {}
@@ -197,11 +273,11 @@ async def _wait_for_results_ready(page) -> tuple[bool, dict]:
             await asyncio.sleep(0.75)
             continue
         last_markers = markers
-        if markers["has_result_links"] or markers["has_feed"]:
+        if _has_results_markers(markers):
             return True, markers
         if markers["captcha_detected"]:
             return False, {**markers, "blocker_type": "captcha_block"}
-        if markers["signin_detected"]:
+        if markers["signin_detected"] and not _has_results_markers(markers):
             return False, {**markers, "blocker_type": "signin_block"}
         if markers["no_results_detected"]:
             return False, {**markers, "blocker_type": "no_results_ui"}
@@ -267,7 +343,7 @@ async def scrape(
             async with async_playwright() as pw:
                 last_stage = "browser_launch"
                 launch_kwargs = dict(
-                    headless=True,
+                    headless=MAPS_HEADLESS,
                     args=MAPS_LAUNCH_ARGS,
                     timeout=MAPS_NAVIGATION_TIMEOUT_MS,
                     handle_sigint=False,
@@ -318,7 +394,7 @@ async def scrape(
                     "proxy": _proxy_log_value(proxy_dict),
                 })
                 await page.goto(maps_url, wait_until="domcontentloaded", timeout=MAPS_NAVIGATION_TIMEOUT_MS)
-                await asyncio.sleep(2.2)
+                await _human_pause(1800, 2800)
                 markers = await _dom_markers(page)
                 log.info(
                     "  [Maps] loaded attempt=%s url=%s title=%s feed=%s links=%s link_count=%s consent=%s captcha=%s signin=%s",
@@ -363,8 +439,30 @@ async def scrape(
                     })
                     await _raise_blocker(page, query, city, "captcha_check", "captcha_block", "CAPTCHA or unusual traffic block detected", markers)
 
-                if markers.get("signin_detected") and not (markers.get("has_result_links") or markers.get("has_feed")):
-                    await _raise_blocker(page, query, city, "signin_check", "selector_mismatch", "Google sign-in prompt blocked the results layout", markers)
+                if markers.get("signin_detected") and not _has_results_markers(markers):
+                    _emit_worker_progress(progress_callback, {
+                        "platform": "Maps",
+                        "phase": "selector_failure",
+                        "query": query,
+                        "city": city,
+                        "attempt": attempt,
+                        "proxy": _proxy_log_value(proxy_dict),
+                        "blocker_type": "signin_overlay",
+                    })
+                    dismissed_signin = await _dismiss_signin_overlay(page)
+                    await _human_pause(900, 1600)
+                    try:
+                        feed = page.locator('div[role="feed"]')
+                        if await feed.count():
+                            await feed.first.evaluate("el => el.scrollBy(0, 900)")
+                        else:
+                            await page.evaluate("window.scrollBy(0, 900)")
+                        await _human_pause(900, 1400)
+                    except Exception:
+                        pass
+                    markers = await _dom_markers(page)
+                    if not dismissed_signin and markers.get("signin_detected") and not _has_results_markers(markers):
+                        await _raise_blocker(page, query, city, "signin_check", "selector_mismatch", "Google sign-in prompt blocked the results layout", markers)
 
                 last_stage = "results_ready"
                 _emit_worker_progress(progress_callback, {
@@ -393,6 +491,16 @@ async def scrape(
                         "blocker_type": blocker_type,
                     })
                     await _raise_blocker(page, query, city, "results_ready", blocker_type, "Google Maps results UI did not become ready", ready_markers)
+
+                try:
+                    feed = page.locator('div[role="feed"]')
+                    if await feed.count():
+                        await feed.first.evaluate("el => el.scrollBy(0, 900)")
+                    else:
+                        await page.evaluate("window.scrollBy(0, 900)")
+                    await _human_pause(900, 1400)
+                except Exception:
+                    pass
 
                 completed_scrolls = scroll_attempts
                 replay_scrolls = 0
@@ -438,7 +546,7 @@ async def scrape(
                                 continue
                             seen.add(label)
                             await card.click()
-                            await asyncio.sleep(1.7)
+                            await _human_pause(1200, 2200)
 
                             lead = Lead(
                                 name=clean(label),
@@ -524,10 +632,10 @@ async def scrape(
                             await feed.first.evaluate("el => el.scrollBy(0, 1400)")
                         else:
                             await page.evaluate("window.scrollBy(0, 1400)")
-                        await asyncio.sleep(1.4)
+                        await _human_pause(900, 1600)
                     except Exception:
                         await page.evaluate("window.scrollBy(0, 1400)")
-                        await asyncio.sleep(1.4)
+                        await _human_pause(900, 1600)
 
                 log.info("  [Maps] complete attempt=%s leads=%s search=%s proxy=%s", attempt, len(leads), search, _proxy_log_value(proxy_dict))
                 return leads
