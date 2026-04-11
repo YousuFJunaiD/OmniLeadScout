@@ -105,10 +105,45 @@ app.add_middleware(
 )
 
 
+def success_response(data=None, message: str = "OK", **extra):
+    payload = {
+        "success": True,
+        "message": message,
+        "data": data,
+    }
+    payload.update(extra)
+    return payload
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    detail = exc.detail
+    message = detail if isinstance(detail, str) else (detail.get("message") or detail.get("error") or "Request failed")
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "success": False,
+            "message": message,
+            "error": detail,
+            "data": None,
+            "detail": detail,
+        },
+    )
+
+
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
     logging.exception("Unhandled error on %s %s", request.method, request.url.path)
-    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+    return JSONResponse(
+        status_code=500,
+        content={
+            "success": False,
+            "message": "Internal server error",
+            "error": "Internal server error",
+            "data": None,
+            "detail": "Internal server error",
+        },
+    )
 
 _job_queue = None
 
@@ -308,7 +343,7 @@ def _public_user(user: dict) -> dict:
         "role": user.get("role") or "user",
     }
 
-def create_auth_response(user: dict) -> dict:
+def create_auth_response(user: dict, message: str = "Authenticated successfully") -> dict:
     public_user = _public_user(user)
     logging.info(
         "Auth response user_id=%s email=%s role=%s",
@@ -324,7 +359,12 @@ def create_auth_response(user: dict) -> dict:
             "role": public_user["role"],
         }
     )
-    return {"token": token, "user": public_user}
+    return success_response(
+        {"token": token, "user": public_user},
+        message=message,
+        token=token,
+        user=public_user,
+    )
 
 
 def get_cached_user(user_id: str):
@@ -1285,7 +1325,6 @@ class ScrapeV2Body(BaseModel):
     enable_indiamart: bool = True
     website_filter: str = "minimal"   # no_website | minimal | all
     max_per_query: int = 25
-    use_proxy: bool = False
 
     @field_validator("niche")
     @classmethod
@@ -1323,7 +1362,6 @@ async def run_job_v2(job_id: str):
     enable_indiamart = job["enable_indiamart"]
     website_filter = job["website_filter"]
     max_per_query  = job["max_per_query"]
-    use_proxy      = job["use_proxy"]
     user_id        = job["user_id"]
     niche          = job["niche"]
 
@@ -1344,40 +1382,30 @@ async def run_job_v2(job_id: str):
 
         # ── Proxy pool ────────────────────────────────────────
         proxy_pool = None
-        if use_proxy:
-            publish_event(job, {"type": "info", "data": "Loading proxy pool…"})
-            try:
-                import config as _cfg
-                from proxy_manager import ProxyPool
-                proxy_pool = ProxyPool(
-                    protocols=_cfg.PROXY_PROTOCOLS,
-                    test_timeout=_cfg.PROXY_TEST_TIMEOUT,
-                    test_workers=_cfg.PROXY_TEST_WORKERS,
-                    max_failures=_cfg.PROXY_MAX_FAILURES,
-                    extra_proxies=_cfg.EXTRA_PROXIES,
-                    verbose=False,
-                )
-                loop = asyncio.get_event_loop()
-                await loop.run_in_executor(None, proxy_pool.load)
-                s = proxy_pool.stats()
-                publish_event(job, {
-                    "type": "proxy_stats",
-                    "data": {
-                        "live": s["live"],
-                        "fastest_ms": s["fastest_ms"],
-                        "by_protocol": s["by_protocol"],
-                    },
-                })
-                publish_event(job, {
-                    "type": "info",
-                    "data": f"Proxy pool ready — {s['live']} live | fastest {s['fastest_ms']}ms",
-                })
-            except Exception as e:
-                publish_event(job, {
-                    "type": "info",
-                    "data": f"Proxy pool failed ({e}), continuing without proxies",
-                })
-                proxy_pool = None
+        try:
+            import config as _cfg
+            from proxy_manager import ProxyPool
+            proxy_pool = ProxyPool(
+                protocols=_cfg.PROXY_PROTOCOLS,
+                test_timeout=_cfg.PROXY_TEST_TIMEOUT,
+                test_workers=_cfg.PROXY_TEST_WORKERS,
+                max_failures=_cfg.PROXY_MAX_FAILURES,
+                extra_proxies=_cfg.EXTRA_PROXIES,
+                verbose=False,
+            )
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, proxy_pool.load)
+            s = proxy_pool.stats()
+            logging.info(
+                "Automatic proxy pool ready job=%s live=%s fastest_ms=%s by_protocol=%s",
+                job_id,
+                s.get("live"),
+                s.get("fastest_ms"),
+                s.get("by_protocol"),
+            )
+        except Exception as e:
+            logging.info("Automatic proxy pool unavailable for job %s: %s", job_id, e)
+            proxy_pool = None
 
         def _get_proxy():
             candidates = []
@@ -1678,7 +1706,8 @@ async def start_scrape_v2(body: ScrapeV2Body, background_tasks: BackgroundTasks,
         )
 
     plan = (usage.get("plan") or "free").lower()
-    max_jobs = 2 if plan == "starter" else 3 if plan == "pro" else 5 if plan in ("agency", "enterprise") else 1
+    is_admin = (current_user.get("role") or "user").lower() == "admin"
+    max_jobs = 999 if is_admin else 2 if plan == "starter" else 3 if plan == "pro" else 5 if plan in ("agency", "enterprise") else 1
     active_for_user = sum(1 for j in active_jobs.values() if j.get("user_id") == user_id and j.get("status") in ("pending", "running", "stopping"))
     
     if active_for_user >= max_jobs:
@@ -1727,7 +1756,6 @@ async def start_scrape_v2(body: ScrapeV2Body, background_tasks: BackgroundTasks,
         "enable_indiamart": body.enable_indiamart,
         "website_filter":  body.website_filter,
         "max_per_query":   body.max_per_query,
-        "use_proxy":       body.use_proxy,
         "user_id":         user_id,
         "niche":           body.niche,
         "profession":      ", ".join(body.queries),   # for history display
@@ -1749,57 +1777,60 @@ async def start_scrape_v2(body: ScrapeV2Body, background_tasks: BackgroundTasks,
     except asyncio.QueueFull:
         logging.error("Job Queue is globally full under heavy load")
         raise HTTPException(429, "System is currently at maximum capacity. Please try again later.")
-    return {"job_id": job_id}
+    return success_response({"job_id": job_id}, message="Scrape job queued", job_id=job_id)
 
 
 @app.post("/auth/register")
 def register(body: RegisterBody, request: Request, background_tasks: BackgroundTasks):
-    if not body.email or "@" not in body.email:
+    email = (body.email or "").strip().lower()
+    name = (body.name or "").strip()
+    if not email or "@" not in email:
         raise HTTPException(400, "Invalid email format")
-    if not body.password or len(body.password) < 6:
-        raise HTTPException(400, "Password must be at least 6 characters")
-    if not body.name or not body.name.strip():
+    if not body.password or len(body.password) < 8:
+        raise HTTPException(400, "Password must be at least 8 characters")
+    if not name:
         raise HTTPException(400, "Name is required")
 
-    rate_key = _auth_rate_limit_key(request, body.email)
+    rate_key = _auth_rate_limit_key(request, email)
     if not _enforce_rate_limit(auth_attempt_log, rate_key, AUTH_RATE_LIMIT_REQUESTS, AUTH_RATE_LIMIT_WINDOW_SECONDS):
-        logging.warning("Auth rate limit exceeded on register for %s", body.email)
+        logging.warning("Auth rate limit exceeded on register for %s", email)
         raise HTTPException(429, "Too many authentication attempts")
-    if get_user_by_email(body.email):
-        logging.warning("Register failed: duplicate email %s", body.email)
+    if get_user_by_email(email):
+        logging.warning("Register failed: duplicate email %s", email)
         raise HTTPException(400, "Email already registered")
     user = create_user(
-        email=body.email,
-        full_name=body.name,
+        email=email,
+        full_name=name,
         hashed_password=hash_password_bcrypt(body.password),
     )
     logging.info("Register created email=%s role=%s", user.get("email"), user.get("role") or "user")
     background_tasks.add_task(_send_welcome_email, user)
-    return create_auth_response(user)
+    return create_auth_response(user, message="Account created successfully")
 
 
 @app.post("/auth/login")
 def login(body: LoginBody, request: Request):
-    if not body.email or "@" not in body.email:
+    email = (body.email or "").strip().lower()
+    if not email or "@" not in email:
         raise HTTPException(400, "Invalid email format")
     if not body.password:
         raise HTTPException(400, "Password is required")
 
-    rate_key = _auth_rate_limit_key(request, body.email)
+    rate_key = _auth_rate_limit_key(request, email)
     if not _enforce_rate_limit(auth_attempt_log, rate_key, AUTH_RATE_LIMIT_REQUESTS, AUTH_RATE_LIMIT_WINDOW_SECONDS):
-        logging.warning("Auth rate limit exceeded on login for %s", body.email)
+        logging.warning("Auth rate limit exceeded on login for %s", email)
         raise HTTPException(429, "Too many authentication attempts")
-    user = get_user_by_email(body.email)
+    user = get_user_by_email(email)
     logging.info(
         "Login lookup email=%s found=%s db_role=%s",
-        body.email.strip().lower(),
+        email,
         bool(user),
         (user or {}).get("role") or "missing",
     )
     if not user or not verify_password(body.password, user.get("hashed_password", "")):
-        logging.warning("Login failed for email %s", body.email)
+        logging.warning("Login failed for email %s", email)
         raise HTTPException(401, "Invalid email or password")
-    return create_auth_response(user)
+    return create_auth_response(user, message="Signed in successfully")
 
 
 @app.get("/auth/me")
@@ -1810,21 +1841,23 @@ def auth_me(current_user=Depends(get_current_user)):
         current_user.get("email"),
         current_user.get("role") or "user",
     )
-    return {"user": _public_user(current_user)}
+    public_user = _public_user(current_user)
+    return success_response({"user": public_user}, message="Current user loaded", user=public_user)
 
 
 @app.post("/auth/refresh")
 def auth_refresh(current_user=Depends(get_current_user), credentials: HTTPAuthorizationCredentials = Depends(auth_scheme)):
     payload = decode_access_token(credentials.credentials if credentials else "")
     if not should_refresh_token(payload):
-        return {"token": None, "user": _public_user(current_user)}
+        public_user = _public_user(current_user)
+        return success_response({"token": None, "user": public_user}, message="Session still valid", token=None, user=public_user)
     refreshed = create_auth_response(current_user)
     return refreshed
 
 
 @app.post("/auth/logout")
 def logout():
-    return {"ok": True}
+    return success_response(None, message="Signed out successfully", ok=True)
 
 
 @app.post("/auth/forgot-password")
@@ -1849,7 +1882,7 @@ async def forgot_password(body: ForgotPasswordBody, request: Request):
         )
         if not sent:
             logging.error("Password reset email failed to send for %s", user.get("email", ""))
-    return {"ok": True}
+    return success_response(None, message="If that email exists, a reset link has been sent", ok=True)
 
 
 @app.post("/auth/reset-password")
@@ -1876,7 +1909,7 @@ def reset_password(body: ResetPasswordBody, request: Request):
     conn.commit()
     conn.close()
     update_user_fields(row["user_id"], hashed_password=hash_password_bcrypt(body.password))
-    return {"ok": True}
+    return success_response(None, message="Password reset successful", ok=True)
 
 
 @app.post("/user/select-plan")
@@ -1885,7 +1918,8 @@ def select_plan(body: SelectPlanBody, current_user=Depends(get_current_user)):
     if plan not in ("starter", "pro", "growth", "enterprise"):
         raise HTTPException(400, "Invalid plan")
     user = update_user_plan(current_user["id"], plan)
-    return {"user": _public_user(user)}
+    public_user = _public_user(user)
+    return success_response({"user": public_user}, message="Plan updated successfully", user=public_user)
 
 
 @app.post("/payment/create-order")
@@ -1914,7 +1948,7 @@ async def payment_create_order(body: CreateOrderBody, current_user=Depends(get_c
         order["addons"] = pricing["addons"]
         order["base_amount"] = pricing["base_amount"]
         order["addons_amount"] = pricing["addons_amount"]
-        return order
+        return success_response(order, message="Payment order created", **order)
     except ValueError as exc:
         raise HTTPException(400, str(exc))
     except Exception as exc:
@@ -1953,7 +1987,8 @@ def payment_verify(body: VerifyPaymentBody, background_tasks: BackgroundTasks, c
         body.razorpay_payment_id,
     )
     background_tasks.add_task(_send_payment_email, user, body.plan, pricing["amount"])
-    return {"ok": True, "user": _public_user(user)}
+    public_user = _public_user(user)
+    return success_response({"user": public_user}, message="Payment verified successfully", ok=True, user=public_user)
 
 
 @app.post("/scrape/start")
@@ -1980,7 +2015,8 @@ async def start_scrape(body: ScrapeBody, current_user=Depends(get_current_user))
         )
 
     plan = (usage.get("plan") or "free").lower()
-    max_jobs = 2 if plan == "starter" else 3 if plan == "pro" else 5 if plan in ("agency", "enterprise") else 1
+    is_admin = (current_user.get("role") or "user").lower() == "admin"
+    max_jobs = 999 if is_admin else 2 if plan == "starter" else 3 if plan == "pro" else 5 if plan in ("agency", "enterprise") else 1
     active_for_user = sum(1 for j in active_jobs.values() if j.get("user_id") == user_id and j.get("status") in ("pending", "running", "stopping"))
     
     if active_for_user >= max_jobs:
@@ -2044,7 +2080,7 @@ async def start_scrape(body: ScrapeBody, current_user=Depends(get_current_user))
     except asyncio.QueueFull:
         logging.error("Job Queue is globally full under heavy load")
         raise HTTPException(429, "System is currently at maximum capacity. Please try again later.")
-    return {"job_id": job_id}
+    return success_response({"job_id": job_id}, message="Scrape job queued", job_id=job_id)
 
 
 @app.post("/scrape/stop/{job_id}")
@@ -2056,7 +2092,7 @@ def stop_scrape(job_id: str, current_user=Depends(get_current_user)):
             update_scrape_job(job_id, status="stopping")
         except Exception:
             pass
-    return {"ok": True}
+    return success_response({"job_id": job_id}, message="Scrape stop requested", ok=True, job_id=job_id)
 
 
 @app.delete("/scrape/job/{job_id}")
@@ -2093,7 +2129,7 @@ def delete_job(job_id: str, current_user=Depends(get_current_user), x_user_id: s
         pass
 
     active_jobs.pop(job_id, None)
-    return {"ok": True, "deleted_job_id": job_id}
+    return success_response({"deleted_job_id": job_id}, message="Scrape job deleted", ok=True, deleted_job_id=job_id)
 
 
 @app.get("/scrape/heartbeat/{job_id}")
@@ -2103,13 +2139,13 @@ def heartbeat(job_id: str, current_user=Depends(get_current_user)):
         job = active_jobs[job_id]
         if job.get("user_id") != current_user["id"]:
             raise HTTPException(403, "Access denied")
-        return {
+        return success_response({
             "alive": True,
             "status": job.get("status", "unknown"),
             "lead_count": int(job.get("lead_count", 0)),
             "processed_areas": int(job.get("processed_areas", 0)),
-        }
-    return {"alive": False, "status": "not_running"}
+        }, message="Heartbeat loaded", alive=True, status=job.get("status", "unknown"))
+    return success_response({"alive": False, "status": "not_running"}, message="No active job", alive=False, status="not_running")
 
 
 @app.post("/scrape/resume/{job_id}")
@@ -2155,7 +2191,7 @@ async def resume_scrape(job_id: str, body: ResumeBody, current_user=Depends(get_
         target_areas_json,
     )
     if existing_job_id:
-        return {"job_id": existing_job_id, "reused": True}
+        return success_response({"job_id": existing_job_id, "reused": True}, message="Existing running job reused", job_id=existing_job_id, reused=True)
 
     return await start_scrape(ScrapeBody(
         profession=row["profession"] or "",
@@ -2175,7 +2211,7 @@ def scrape_status(job_id: str, current_user=Depends(get_current_user)):
         if job.get("user_id") != current_user["id"]:
             raise HTTPException(403, "Access denied")
         recent_events = list(job.get("events", []))[-20:]
-        return {
+        payload = {
             "job_id": job_id,
             "status": job.get("status", "running"),
             "lead_count": int(job.get("lead_count", 0)),
@@ -2188,6 +2224,7 @@ def scrape_status(job_id: str, current_user=Depends(get_current_user)):
             "profession": job.get("profession", ""),
             "location": job.get("location", ""),
         }
+        return success_response(payload, message="Scrape status loaded", **payload)
 
     conn = get_db()
     row = conn.execute(
@@ -2209,7 +2246,7 @@ def scrape_status(job_id: str, current_user=Depends(get_current_user)):
         conn.commit()
         conn.close()
 
-    return {
+    payload = {
         "job_id": row["job_id"],
         "status": status,
         "lead_count": row["lead_count"] or 0,
@@ -2223,6 +2260,7 @@ def scrape_status(job_id: str, current_user=Depends(get_current_user)):
         "profession": row["profession"] or "",
         "location": row["location"] or "",
     }
+    return success_response(payload, message="Scrape status loaded", **payload)
 
 
 @app.get("/scrape/download/{job_id}")
@@ -2404,14 +2442,16 @@ async def ws_scrape(ws: WebSocket, job_id: str):
 
 @app.get("/user/history")
 def user_history(current_user=Depends(get_current_user)):
-    return {"history": _get_cached_history(current_user["id"])}
+    history = _get_cached_history(current_user["id"])
+    return success_response({"history": history}, message="User history loaded", history=history)
 
 
 @app.get("/user/history/{user_id}")
 def user_history_compat(user_id: str, current_user=Depends(get_current_user)):
     if user_id != current_user["id"]:
         raise HTTPException(403, "Access denied")
-    return {"history": list_user_history_supabase(current_user["id"])}
+    history = list_user_history_supabase(current_user["id"])
+    return success_response({"history": history}, message="User history loaded", history=history)
 
 
 @app.get("/user/leads")
@@ -2427,12 +2467,13 @@ def user_leads(
         source=source or None,
         website_status=website_status or None,
     )
-    return {"leads": rows}
+    return success_response({"leads": rows}, message="User leads loaded", leads=rows)
 
 
 @app.get("/user/usage")
 def user_usage(current_user=Depends(get_current_user)):
-    return _get_cached_usage(current_user["id"])
+    usage = _get_cached_usage(current_user["id"])
+    return success_response(usage, message="Usage loaded", **usage)
 
 
 @app.get("/scrape/job/{job_id}/leads")
@@ -2463,7 +2504,7 @@ def get_job_leads(job_id: str, current_user=Depends(get_current_user), x_user_id
         except Exception:
             pass
             
-    return {"leads": leads}
+    return success_response({"leads": leads}, message="Job leads loaded", leads=leads)
 
 
 @app.get("/admin/users")
@@ -2482,7 +2523,7 @@ def admin_users(current_user=Depends(require_admin_user)):
             "total_leads": stats_by_user.get(user.get("id"), {}).get("total_leads", 0),
         }
         result.append(row)
-    return {"users": result}
+    return success_response({"users": result}, message="Admin users loaded", users=result)
 
 
 @app.put("/admin/update-user")
@@ -2495,7 +2536,8 @@ def admin_update_user(body: UpdateUserBody, current_user=Depends(require_admin_u
         body.plan,
         body.role,
     )
-    return {"user": _public_user(user)}
+    public_user = _public_user(user)
+    return success_response({"user": public_user}, message="User updated successfully", user=public_user)
 
 
 @app.get("/admin/jobs")
@@ -2521,7 +2563,8 @@ def admin_jobs(current_user=Depends(require_admin_user)):
         ORDER BY j.created_at DESC LIMIT 200
     """).fetchall()
     conn.close()
-    return {"jobs": [dict(j) for j in jobs]}
+    rows = [dict(j) for j in jobs]
+    return success_response({"jobs": rows}, message="Admin jobs loaded", jobs=rows)
 
 
 @app.get("/admin/stats")
@@ -2535,7 +2578,7 @@ def admin_stats(current_user=Depends(require_admin_user)):
     avg_leads   = conn.execute("SELECT AVG(c) FROM (SELECT COUNT(*) AS c FROM leads GROUP BY job_id)").fetchone()[0]
     csv_files   = len(list(OUTPUT_DIR.glob("*.csv")))
     conn.close()
-    return {
+    payload = {
         "total_users":    total_users,
         "total_jobs":     total_jobs,
         "total_leads":    int(total_leads),
@@ -2545,7 +2588,8 @@ def admin_stats(current_user=Depends(require_admin_user)):
         "top_location":   top_loc[0] if top_loc else None,
         "avg_leads":      round(avg_leads) if avg_leads else 0,
     }
+    return success_response(payload, message="Admin stats loaded", **payload)
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "version": "1.0.0"}
+    return success_response({"status": "ok", "version": "1.0.0"}, message="Health check passed", status="ok", version="1.0.0")

@@ -103,9 +103,11 @@ export async function tryRefreshToken() {
     return null
   }
   const data = await response.json()
-  if (data?.token) setToken(data.token)
-  if (data?.user) setStoredUser(data.user)
-  return data
+  const nextToken = data?.token ?? data?.data?.token ?? null
+  const nextUser = data?.user ?? data?.data?.user ?? null
+  if (nextToken) setToken(nextToken)
+  if (nextUser) setStoredUser(nextUser)
+  return { ...data, token: nextToken, user: nextUser }
 }
 
 export async function authFetch(url, options = {}, onUnauthorized) {

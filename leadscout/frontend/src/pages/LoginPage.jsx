@@ -21,20 +21,47 @@ export default function LoginPage({ onLogin }) {
   const [showPassword, setShowPassword] = useState(false)
   const navigate = useNavigate()
 
+  const parseAuthPayload = (payload) => ({
+    token: payload?.token || payload?.data?.token || null,
+    user: payload?.user || payload?.data?.user || null,
+  })
+
   const submit = async () => {
+    const normalizedEmail = form.email.trim().toLowerCase()
+    const normalizedName = form.name.trim()
+    const password = form.password
+    if (!normalizedEmail || !normalizedEmail.includes("@")) {
+      setError("Enter a valid email address.")
+      return
+    }
+    if (!password.trim()) {
+      setError("Enter your password.")
+      return
+    }
+    if (mode === "register" && !normalizedName) {
+      setError("Enter your full name.")
+      return
+    }
+    if (mode === "register" && password.length < 8) {
+      setError("Password must be at least 8 characters.")
+      return
+    }
     setError(""); setLoading(true)
     try {
       const res  = await fetch(apiUrl(mode === "login" ? "/auth/login" : "/auth/register"), {
         method: "POST",
         headers: getApiHeaders(),
-        body: JSON.stringify(form),
+        body: JSON.stringify({ name: normalizedName, email: normalizedEmail, password }),
       })
       const data = await res.json()
       if (!res.ok) {
         throw new Error(toReadableError(data?.detail || data, "Failed"))
       }
-      
-      onLogin({ token: data.token, user: data.user })
+      const auth = parseAuthPayload(data)
+      if (!auth.token || !auth.user) {
+        throw new Error("Authentication response was incomplete.")
+      }
+      onLogin(auth)
       navigate("/dashboard")
     } catch (e) { 
       setError(toReadableError(e?.message, "Failed")) 

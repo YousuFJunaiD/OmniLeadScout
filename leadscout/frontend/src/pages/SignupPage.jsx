@@ -21,21 +21,36 @@ export default function SignupPage({ onLogin }) {
   const nav = useNavigate()
 
   const set = (k) => (e) => setForm(f => ({ ...f, [k]: e.target.value }))
+  const parseAuthPayload = (payload) => ({
+    token: payload?.token || payload?.data?.token || null,
+    user: payload?.user || payload?.data?.user || null,
+  })
 
   const submit = async () => {
-    if (!form.name.trim() || !form.email.trim() || !form.password.trim()) {
+    const name = form.name.trim()
+    const email = form.email.trim().toLowerCase()
+    const password = form.password
+    if (!name || !email || !password.trim()) {
       setError("All fields are required."); return
+    }
+    if (!email.includes("@")) {
+      setError("Enter a valid email address."); return
+    }
+    if (password.length < 8) {
+      setError("Password must be at least 8 characters."); return
     }
     setError(""); setLoading(true)
     try {
       const res  = await fetch(apiUrl("/auth/register"), {
         method: "POST",
         headers: getApiHeaders(),
-        body: JSON.stringify(form),
+        body: JSON.stringify({ name, email, password }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(toReadableError(data?.detail || data, "Registration failed"))
-      onLogin(data)
+      const auth = parseAuthPayload(data)
+      if (!auth.token || !auth.user) throw new Error("Registration response was incomplete")
+      onLogin(auth)
       nav("/dashboard")
     } catch (e) { setError(toReadableError(e?.message, "Registration failed")) }
     setLoading(false)
