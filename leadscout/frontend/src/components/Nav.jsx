@@ -1,11 +1,17 @@
 import React from "react";
 import { Link, useLocation } from "react-router-dom"
+import { useEffect, useState } from "react"
 
 export default function Nav({ user, onLogout }) {
   const loc = useLocation()
+  const [mobileOpen, setMobileOpen] = useState(false)
   const isGuest = !user || user.id === "guest"
   const plan = user?.plan ? user.plan.toUpperCase() : "STARTER"
   const isAdmin = (user?.role || "user").toLowerCase() === "admin"
+
+  useEffect(() => {
+    setMobileOpen(false)
+  }, [loc.pathname])
 
   return (
     <nav className="nav">
@@ -14,7 +20,19 @@ export default function Nav({ user, onLogout }) {
         <span className="nav-logo-text">Lead<span>Scout</span></span>
       </Link>
 
-      <div className="nav-links">
+      <button
+        type="button"
+        className="nav-mobile-toggle"
+        aria-label={mobileOpen ? "Close navigation menu" : "Open navigation menu"}
+        aria-expanded={mobileOpen}
+        onClick={() => setMobileOpen((open) => !open)}
+      >
+        <span />
+        <span />
+        <span />
+      </button>
+
+      <div className={`nav-links ${mobileOpen ? "nav-links-open" : ""}`}>
         {isGuest ? (
           <>
             <Link to="/pricing" className={`nav-link ${loc.pathname === "/pricing" ? "active" : ""}`}>Pricing</Link>
