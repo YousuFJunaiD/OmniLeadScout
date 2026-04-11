@@ -4,7 +4,7 @@
 import asyncio, re, time, random, logging, os, csv, hashlib
 from datetime import datetime
 from dataclasses import dataclass, field, asdict
-from typing import Optional, List
+from typing import Optional, List, Tuple
 from urllib.parse import urljoin, urlparse
 import requests
 import httpx
@@ -97,6 +97,127 @@ def make_runtime_lead_key(lead) -> str:
     address = clean(getattr(lead, "address", "") if hasattr(lead, "address") else lead.get("address") or lead.get("Address") or "")
     base = f"{name.lower()}|{phone}|{address.lower()}"
     return hashlib.sha1(base.encode("utf-8")).hexdigest()
+
+
+def has_strong_business_metadata(lead: Lead) -> bool:
+    return bool(
+        clean(lead.address)
+        or clean(lead.category)
+        or clean(lead.rating)
+        or clean(lead.reviews)
+        or clean(lead.website_status) in {"minimal", "full"}
+    )
+
+
+def looks_weak_listing(lead: Lead) -> bool:
+    name = clean(lead.name).lower()
+    weak_name_patterns = [
+        "suggest an edit",
+        "claim this business",
+        "add missing information",
+        "temporarily closed",
+        "permanently closed",
+        "update business",
+    ]
+    if any(pattern in name for pattern in weak_name_patterns):
+        return True
+    if not clean(lead.phone) and not clean(lead.website) and not clean(lead.address) and not clean(lead.rating):
+        return True
+    return False
+
+
+def lead_quality_score(lead: Lead) -> int:
+    score = 0
+    phone = bool(clean_phone(lead.phone))
+    website = bool(clean(lead.website))
+    category = bool(clean(lead.category))
+    location_meta = bool(clean(lead.address) or clean(lead.city))
+    strong_meta = has_strong_business_metadata(lead)
+
+    if phone:
+        score += 5
+    if website:
+        score += 4
+    if category:
+        score += 2
+    if location_meta:
+        score += 2
+    if lead.source == "justdial":
+        score += 2
+    if lead.source == "indiamart":
+        score += 2
+    if lead.source == "google_maps" and strong_meta:
+        score += 1
+    if not phone and not website:
+        score -= 4
+    if looks_weak_listing(lead):
+        score -= 3
+    if not strong_meta:
+        score -= 2
+    return score
+
+
+def lead_quality_class(score: int) -> str:
+    if score >= 8:
+        return "high_quality"
+    if score >= 3:
+        return "medium_quality"
+    return "low_quality"
+
+
+def should_keep_quality(lead: Lead, plan: str, role: str = "user") -> bool:
+    normalized_role = clean(role).lower() or "user"
+    normalized_plan = clean(plan).lower() or "starter"
+    if normalized_role == "admin" or normalized_plan in {"growth", "team"}:
+        if clean_phone(lead.phone) or clean(lead.website):
+            return True
+        return lead_quality_score(lead) >= 6 and not looks_weak_listing(lead)
+    if normalized_plan == "pro":
+        return lead_quality_score(lead) >= 1 and not (looks_weak_listing(lead) and not clean_phone(lead.phone) and not clean(lead.website))
+    return True
+
+
+def lead_sort_key(lead: Lead) -> Tuple[int, int, int, int, int]:
+    score = lead_quality_score(lead)
+    return (
+        score,
+        1 if clean_phone(lead.phone) else 0,
+        1 if clean(lead.website) else 0,
+        1 if has_strong_business_metadata(lead) else 0,
+        1 if lead.source in {"justdial", "indiamart"} else 0,
+    )
+
+
+def choose_richer_lead(existing: Lead, incoming: Lead) -> Lead:
+    if lead_sort_key(incoming) > lead_sort_key(existing):
+        richer = incoming
+        weaker = existing
+    else:
+        richer = existing
+        weaker = incoming
+    source_labels = sorted(set(filter(None, (richer.source or "").split("+") + (weaker.source or "").split("+"))))
+    richer.source = "+".join(source_labels)
+    for f in ["phone", "email", "address", "website", "rating", "reviews", "listing_url", "category", "city", "website_status"]:
+        if not getattr(richer, f) and getattr(weaker, f):
+            setattr(richer, f, getattr(weaker, f))
+    return richer
+
+
+def rank_and_deduplicate_leads(leads: List[Lead], plan: str, role: str = "user", limit: Optional[int] = None) -> List[Lead]:
+    merged = {}
+    for lead in leads:
+        k = _key(lead.name)
+        if not k:
+            continue
+        if k not in merged:
+            merged[k] = lead
+        else:
+            merged[k] = choose_richer_lead(merged[k], lead)
+    ranked = sorted(merged.values(), key=lead_sort_key, reverse=True)
+    filtered = [lead for lead in ranked if should_keep_quality(lead, plan, role)]
+    if limit is not None:
+        return filtered[: max(0, int(limit))]
+    return filtered
 
 
 def _classify_website_response(input_url: str, final_url: str, html: str) -> str:
@@ -389,14 +510,7 @@ def deduplicate(leads: List[Lead]) -> List[Lead]:
         if k not in seen:
             seen[k] = lead
         else:
-            existing = seen[k]
-            # Merge source labels
-            srcs = set(existing.source.split("+") + lead.source.split("+"))
-            existing.source = "+".join(sorted(srcs))
-            # Fill in missing fields from the duplicate
-            for f in ["phone", "email", "address", "website", "rating", "reviews", "listing_url"]:
-                if not getattr(existing, f) and getattr(lead, f):
-                    setattr(existing, f, getattr(lead, f))
+            seen[k] = choose_richer_lead(seen[k], lead)
     return list(seen.values())
 
 # ── CSV output ────────────────────────────────────────────────────────────────

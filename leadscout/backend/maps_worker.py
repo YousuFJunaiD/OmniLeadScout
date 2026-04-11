@@ -21,7 +21,15 @@ from supabase_db import (
     save_leads,
     update_scrape_job,
 )
-from utils import Lead, async_enrich_websites, make_runtime_lead_key, should_keep
+from utils import (
+    Lead,
+    async_enrich_websites,
+    lead_quality_class,
+    lead_quality_score,
+    make_runtime_lead_key,
+    rank_and_deduplicate_leads,
+    should_keep,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -190,6 +198,26 @@ def _lead_to_payload(lead: Lead) -> Dict[str, Any]:
         "query": data.get("query", ""),
         "Maps URL": data.get("listing_url", ""),
     }
+
+
+def _source_priority(plan: str, role: str = "user") -> List[tuple[str, str]]:
+    normalized_role = str(role or "user").strip().lower()
+    normalized_plan = str(plan or "starter").strip().lower()
+    if normalized_role == "admin" or normalized_plan in {"growth", "team"}:
+        return [("JustDial", "justdial"), ("IndiaMart", "indiamart"), ("Maps", "google_maps")]
+    if normalized_plan == "pro":
+        return [("JustDial", "justdial"), ("Maps", "google_maps"), ("IndiaMart", "indiamart")]
+    return [("Maps", "google_maps"), ("JustDial", "justdial"), ("IndiaMart", "indiamart")]
+
+
+def _effective_max_results(plan: str, role: str, base_max: int) -> int:
+    normalized_role = str(role or "user").strip().lower()
+    normalized_plan = str(plan or "starter").strip().lower()
+    if normalized_role == "admin" or normalized_plan in {"growth", "team"}:
+        return min(60, max(base_max, int(base_max * 2)))
+    if normalized_plan == "pro":
+        return min(40, max(base_max, int(base_max * 1.5)))
+    return base_max
 
 
 def _load_route_profiles() -> Dict[str, Any]:
@@ -424,9 +452,12 @@ async def process_job(job_row: Dict[str, Any]) -> None:
     website_filter = (job_row.get("website_filter") or "minimal").strip().lower()
     user = get_user_by_id(user_id) or {}
     speed_profile = _speed_profile_for_user(user)
+    user_plan = str(user.get("plan") or "starter").strip().lower()
+    user_role = str(user.get("role") or "user").strip().lower()
     batch_size = int(speed_profile["batch_size"])
     website_concurrency = int(speed_profile["website_concurrency"])
     item_timeout = int(speed_profile["item_timeout"])
+    effective_max_per_query = _effective_max_results(user_plan, user_role, max_per_query)
 
     state = {
         "status": "running",
@@ -443,25 +474,28 @@ async def process_job(job_row: Dict[str, Any]) -> None:
     }
     await _save_job_state(job_id, state)
     logging.info(
-        "Maps worker claimed job=%s user=%s email=%s plan=%s role=%s speed=%s city=%s queries=%s platforms=%s",
+        "Maps worker claimed job=%s user=%s email=%s plan=%s role=%s speed=%s effective_max=%s city=%s queries=%s platforms=%s",
         job_id,
         user_id,
         user.get("email"),
         user.get("plan"),
         user.get("role"),
         speed_profile["label"],
+        effective_max_per_query,
         city,
         queries,
         platforms,
     )
 
     enabled_platforms = []
-    if platforms.get("maps"):
-        enabled_platforms.append(("Maps", "google_maps"))
-    if platforms.get("justdial"):
-        enabled_platforms.append(("JustDial", "justdial"))
-    if platforms.get("indiamart"):
-        enabled_platforms.append(("IndiaMart", "indiamart"))
+    requested_sources = {
+        "google_maps": bool(platforms.get("maps")),
+        "justdial": bool(platforms.get("justdial")),
+        "indiamart": bool(platforms.get("indiamart")),
+    }
+    for platform_name, source_key in _source_priority(user_plan, user_role):
+        if requested_sources.get(source_key):
+            enabled_platforms.append((platform_name, source_key))
 
     all_leads: List[Lead] = []
     total_found = 0
@@ -547,7 +581,7 @@ async def process_job(job_row: Dict[str, Any]) -> None:
                 )
                 if platform_name == "Maps":
                     results = await asyncio.wait_for(
-                        _run_maps_subprocess(query, city, max_per_query, resume_state, _progress_callback, proxy_dict=route_context["proxy"]),
+                        _run_maps_subprocess(query, city, effective_max_per_query, resume_state, _progress_callback, proxy_dict=route_context["proxy"]),
                         timeout=item_timeout_current,
                     )
                     _report_proxy_outcome(route_context.get("proxy"), None, success=True)
@@ -555,12 +589,12 @@ async def process_job(job_row: Dict[str, Any]) -> None:
                     return results
                 if platform_name == "JustDial":
                     return await asyncio.wait_for(
-                        justdial_scrape(query, city, max_per_query, None, resume_state=resume_state, progress_callback=_progress_callback),
+                        justdial_scrape(query, city, effective_max_per_query, None, resume_state=resume_state, progress_callback=_progress_callback),
                         timeout=150,
                     )
                 if platform_name == "IndiaMart":
                     return await asyncio.wait_for(
-                        indiamart_scrape(query, city, max_per_query, None, resume_state=resume_state, progress_callback=_progress_callback),
+                        indiamart_scrape(query, city, effective_max_per_query, None, resume_state=resume_state, progress_callback=_progress_callback),
                         timeout=120,
                     )
                 return []
@@ -676,8 +710,9 @@ async def process_job(job_row: Dict[str, Any]) -> None:
 
             _event(state, "info", "Saving leads...")
             await _save_job_state(job_id, state)
+            ranked_batch = rank_and_deduplicate_leads(batch_leads, user_plan, user_role)
             payloads = []
-            for lead in batch_leads:
+            for lead in ranked_batch:
                 if _job_cancel_requested(job_id):
                     state["status"] = "stopped"
                     break
@@ -690,6 +725,9 @@ async def process_job(job_row: Dict[str, Any]) -> None:
                 payload = _lead_to_payload(lead)
                 payloads.append(payload)
                 all_leads.append(lead)
+                quality_score = lead_quality_score(lead)
+                quality_class = lead_quality_class(quality_score)
+                _event(state, "info", f"Selected {quality_class} lead from {lead.source} score={quality_score} phone={bool(lead.phone)} website={bool(lead.website)}")
                 _event(state, "lead", payload)
             if payloads:
                 save_leads(job_id, user_id, payloads)
@@ -698,6 +736,7 @@ async def process_job(job_row: Dict[str, Any]) -> None:
             if batch_start + batch_size < len(work_items):
                 await asyncio.sleep(float(speed_profile["batch_delay"]))
 
+        all_leads = rank_and_deduplicate_leads(all_leads, user_plan, user_role)
         final_status = _final_status(state["status"] == "stopped", total_found, state["saved_count"], source_failures)
         state["status"] = final_status
         state["progress_message"] = _final_status_message(final_status)
