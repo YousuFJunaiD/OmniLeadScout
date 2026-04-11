@@ -1727,7 +1727,8 @@ async def run_job_v2(job_id: str):
         plan = (get_cached_user(user_id) or {}).get("plan", "free").lower()
         if plan == "starter": concurrency = 2
         elif plan == "pro": concurrency = 5
-        elif plan in ("growth", "team"): concurrency = 10
+        elif plan == "growth": concurrency = 10
+        elif plan == "team": concurrency = 999
         else: concurrency = 1
         scrape_semaphore = asyncio.Semaphore(concurrency)
         work_items = []
@@ -2078,7 +2079,7 @@ async def start_scrape_v2(body: ScrapeV2Body, background_tasks: BackgroundTasks,
 
     plan = (usage.get("plan") or "free").lower()
     is_admin = (current_user.get("role") or "user").lower() == "admin"
-    max_jobs = 999 if is_admin else 2 if plan == "starter" else 3 if plan == "pro" else 5 if plan in ("growth", "team") else 1
+    max_jobs = 999 if is_admin else 999 if plan == "team" else 2 if plan == "starter" else 3 if plan == "pro" else 5 if plan == "growth" else 1
     history_rows = list_user_history_supabase(user_id)
     active_for_user = sum(1 for row in history_rows if (row.get("status") or "").lower() in ("pending", "queued", "running", "stopping"))
     
@@ -2408,7 +2409,7 @@ async def start_scrape(body: ScrapeBody, current_user=Depends(get_current_user))
 
     plan = (usage.get("plan") or "free").lower()
     is_admin = (current_user.get("role") or "user").lower() == "admin"
-    max_jobs = 999 if is_admin else 2 if plan == "starter" else 3 if plan == "pro" else 5 if plan in ("growth", "team") else 1
+    max_jobs = 999 if is_admin else 999 if plan == "team" else 2 if plan == "starter" else 3 if plan == "pro" else 5 if plan == "growth" else 1
     active_for_user = sum(1 for j in active_jobs.values() if j.get("user_id") == user_id and j.get("status") in ("pending", "running", "stopping"))
     
     if active_for_user >= max_jobs:

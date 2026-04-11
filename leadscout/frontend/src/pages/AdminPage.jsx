@@ -5,11 +5,16 @@ import Nav from "../components/Nav"
 import SparklesBg from "../components/SparklesBg"
 import { authFetch } from "../lib/auth"
 
+const PLAN_OPTIONS = ["starter", "pro", "growth", "team"]
+const ROLE_OPTIONS = ["user", "admin"]
+
 export default function AdminPage({ user, onLogout }) {
   const navigate = useNavigate()
   const [users, setUsers] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState("")
+  const [savingId, setSavingId] = useState("")
+  const [banner, setBanner] = useState("")
 
   const normalizedRole = String(user?.role || "").trim().toLowerCase()
 
@@ -29,7 +34,11 @@ export default function AdminPage({ user, onLogout }) {
         if (!res.ok) {
           throw new Error(data?.detail || "Unable to load admin users")
         }
-        setUsers(data.users || [])
+        setUsers((data.users || []).map((row) => ({
+          ...row,
+          draftPlan: row.plan || "starter",
+          draftRole: row.role || "user",
+        })))
         setError("")
       })
       .catch((err) => {
@@ -45,6 +54,50 @@ export default function AdminPage({ user, onLogout }) {
   }, [navigate, normalizedRole, user])
 
   const isAdmin = normalizedRole === "admin"
+
+  const updateDraft = (id, key, value) => {
+    setUsers((prev) => prev.map((row) => (row.id === id ? { ...row, [key]: value } : row)))
+  }
+
+  const saveRow = async (row) => {
+    setSavingId(row.id)
+    setError("")
+    setBanner("")
+    try {
+      const res = await authFetch("/admin/update-user", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          user_id: row.id,
+          plan: row.draftPlan,
+          role: row.draftRole,
+        }),
+      }, () => navigate("/login"))
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        throw new Error(data?.message || data?.detail || "Unable to update user")
+      }
+      const nextUser = data?.user || data?.data?.user || {}
+      setUsers((prev) =>
+        prev.map((item) =>
+          item.id === row.id
+            ? {
+                ...item,
+                plan: nextUser.plan || row.draftPlan,
+                role: nextUser.role || row.draftRole,
+                draftPlan: nextUser.plan || row.draftPlan,
+                draftRole: nextUser.role || row.draftRole,
+              }
+            : item
+        )
+      )
+      setBanner(`Updated ${row.email || row.name || "user"} successfully.`)
+    } catch (err) {
+      setError(String(err?.message || "Unable to update user"))
+    } finally {
+      setSavingId("")
+    }
+  }
 
   return (
     <div className="page">
@@ -74,6 +127,9 @@ export default function AdminPage({ user, onLogout }) {
               <p style={{ color: "var(--text-muted)", fontSize: 12, marginBottom: 24 }}>
                 Current role: {user?.role || "missing"}
               </p>
+              <p style={{ color: "var(--text-muted)", fontSize: 12, marginBottom: 24 }}>
+                Team plan is unlimited for internal staff. Admin role remains fully unlimited regardless of plan.
+              </p>
 
               {loading ? (
                 <div style={{ color: "var(--text-muted)" }}>Loading users…</div>
@@ -81,6 +137,7 @@ export default function AdminPage({ user, onLogout }) {
                 <div style={{ color: "var(--accent-red)" }}>{error}</div>
               ) : (
                 <>
+                  {banner && <div style={{ color: "var(--accent-cyan)", marginBottom: 18 }}>{banner}</div>}
                   <div className="mobile-only admin-mobile-list">
                     {users.map((row) => (
                       <div key={`mobile-${row.id}`} className="admin-mobile-card">
@@ -91,9 +148,26 @@ export default function AdminPage({ user, onLogout }) {
                         <div className="admin-mobile-meta">
                           <div>Email: {row.email || "—"}</div>
                           <div>Plan: {row.plan || "starter"}</div>
+                          <div>Role: {row.role || "user"}</div>
                           <div>Jobs: {row.job_count || 0}</div>
                           <div>Total Leads: {row.total_leads || 0}</div>
                         </div>
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 12 }}>
+                          <select value={row.draftPlan || "starter"} onChange={(e) => updateDraft(row.id, "draftPlan", e.target.value)}>
+                            {PLAN_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
+                          </select>
+                          <select value={row.draftRole || "user"} onChange={(e) => updateDraft(row.id, "draftRole", e.target.value)}>
+                            {ROLE_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
+                          </select>
+                        </div>
+                        <button
+                          className="btn btn-ghost"
+                          style={{ marginTop: 12, width: "100%", justifyContent: "center" }}
+                          onClick={() => saveRow(row)}
+                          disabled={savingId === row.id}
+                        >
+                          {savingId === row.id ? "Saving..." : "Save Update"}
+                        </button>
                       </div>
                     ))}
                   </div>
@@ -107,6 +181,7 @@ export default function AdminPage({ user, onLogout }) {
                           <th>Role</th>
                           <th>Jobs</th>
                           <th>Total Leads</th>
+                          <th>Update</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -114,10 +189,28 @@ export default function AdminPage({ user, onLogout }) {
                           <tr key={row.id}>
                             <td>{row.name || "—"}</td>
                             <td>{row.email || "—"}</td>
-                            <td>{row.plan || "starter"}</td>
-                            <td><span className={`badge ${row.role === "admin" ? "badge-cyan" : "badge-gold"}`}>{row.role || "user"}</span></td>
+                            <td>
+                              <select value={row.draftPlan || "starter"} onChange={(e) => updateDraft(row.id, "draftPlan", e.target.value)}>
+                                {PLAN_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
+                              </select>
+                            </td>
+                            <td>
+                              <select value={row.draftRole || "user"} onChange={(e) => updateDraft(row.id, "draftRole", e.target.value)}>
+                                {ROLE_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
+                              </select>
+                            </td>
                             <td>{row.job_count || 0}</td>
                             <td>{row.total_leads || 0}</td>
+                            <td>
+                              <button
+                                className="btn btn-ghost"
+                                style={{ padding: "4px 12px", fontSize: 11 }}
+                                onClick={() => saveRow(row)}
+                                disabled={savingId === row.id}
+                              >
+                                {savingId === row.id ? "Saving..." : "Save"}
+                              </button>
+                            </td>
                           </tr>
                         ))}
                       </tbody>

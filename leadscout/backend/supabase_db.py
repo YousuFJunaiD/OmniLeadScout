@@ -430,6 +430,13 @@ def enforce_plan(user_id: str, requested_platforms: Dict[str, bool]) -> Dict[str
             "platforms": ["google_maps", "justdial", "web"],
         }
         return usage
+    if (user.get("plan") or "starter").lower() == "team":
+        usage["limits"] = {
+            "leads": float("inf"),
+            "searches": float("inf"),
+            "platforms": ["google_maps", "justdial", "web"],
+        }
+        return usage
     limits = usage["limits"]
     requested = normalize_requested_platforms(requested_platforms)
 
