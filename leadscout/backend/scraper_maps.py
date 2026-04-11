@@ -58,6 +58,8 @@ RESULT_CONTAINER_SELECTORS = [
     'div[aria-label*="Results"]',
     'div[role="main"]',
 ]
+
+PHONE_TEXT_RE = re.compile(r"(?:\+?\d[\d()\-\s]{6,}\d)")
 BLOCKER_TEXT_PATTERNS = {
     "captcha_block": [
         "unusual traffic",
@@ -283,6 +285,68 @@ async def _wait_for_results_ready(page) -> tuple[bool, dict]:
             return False, {**markers, "blocker_type": "no_results_ui"}
         await asyncio.sleep(0.9)
     return False, last_markers
+
+
+async def _extract_visible_phone(page) -> str:
+    selectors = [
+        'button[data-tooltip="Copy phone number"]',
+        'button[aria-label*="Phone"]',
+        'button[aria-label*="phone"]',
+        'a[href^="tel:"]',
+        'button[data-item-id*="phone"]',
+        'div[data-tooltip="Copy phone number"]',
+    ]
+    for selector in selectors:
+        try:
+            nodes = await page.query_selector_all(selector)
+            for node in nodes:
+                text = ""
+                try:
+                    text = await node.inner_text()
+                except Exception:
+                    text = await node.get_attribute("aria-label") or await node.get_attribute("href") or ""
+                phone = clean_phone(text.replace("tel:", ""))
+                if phone:
+                    return phone
+        except Exception:
+            pass
+
+    text_blocks = []
+    for selector in [
+        'div[role="main"]',
+        'div[role="dialog"]',
+        'body',
+    ]:
+        try:
+            locator = page.locator(selector)
+            if await locator.count():
+                text_blocks.append(await locator.first.inner_text(timeout=1200))
+        except Exception:
+            continue
+    merged = "\n".join(text_blocks)
+    for match in PHONE_TEXT_RE.findall(merged or ""):
+        phone = clean_phone(match)
+        if len(re.sub(r"[^\d]", "", phone)) >= 7:
+            return phone
+    return ""
+
+
+async def _extract_visible_website(page) -> str:
+    for sel in [
+        'a[data-tooltip="Open website"]',
+        'a[aria-label*="website"]',
+        'a[aria-label*="Website"]',
+        'a[data-item-id*="authority"]',
+    ]:
+        try:
+            elements = await page.query_selector_all(sel)
+            for el in elements:
+                href = await el.get_attribute("href") or ""
+                if href and "google.com" not in href:
+                    return href
+        except Exception:
+            pass
+    return ""
 
 
 async def _raise_blocker(page, query: str, city: str, stage: str, blocker_type: str, message: str, dom_markers: Optional[dict] = None):
@@ -557,33 +621,8 @@ async def scrape(
                                 listing_url=page.url,
                             )
 
-                            for sel in [
-                                'button[data-tooltip="Copy phone number"]',
-                                'button[aria-label*="Phone"]',
-                                'button[aria-label*="phone"]',
-                            ]:
-                                try:
-                                    el = await page.query_selector(sel)
-                                    if el:
-                                        lead.phone = clean_phone(await el.inner_text())
-                                        break
-                                except Exception:
-                                    pass
-
-                            for sel in [
-                                'a[data-tooltip="Open website"]',
-                                'a[aria-label*="website"]',
-                                'a[aria-label*="Website"]',
-                            ]:
-                                try:
-                                    el = await page.query_selector(sel)
-                                    if el:
-                                        href = await el.get_attribute("href") or ""
-                                        if href and "google.com" not in href:
-                                            lead.website = href
-                                        break
-                                except Exception:
-                                    pass
+                            lead.phone = await _extract_visible_phone(page)
+                            lead.website = await _extract_visible_website(page)
 
                             for sel in [
                                 'button[data-tooltip="Copy address"]',
@@ -621,7 +660,13 @@ async def scrape(
                                 pass
 
                             leads.append(lead)
-                            log.info("    [Maps] ✓ %s", lead.name[:50])
+                            log.info(
+                                "    [Maps] ✓ %s phone_found=%s website_found=%s email_found=%s",
+                                lead.name[:50],
+                                bool(lead.phone),
+                                bool(lead.website),
+                                bool(lead.email),
+                            )
                         except Exception as card_exc:
                             log.warning("  [Maps] extraction failed attempt=%s stage=%s type=%s error=%s", attempt, last_stage, type(card_exc).__name__, card_exc)
 

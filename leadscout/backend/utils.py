@@ -5,6 +5,7 @@ import asyncio, re, time, random, logging, os, csv, hashlib
 from datetime import datetime
 from dataclasses import dataclass, field, asdict
 from typing import Optional, List
+from urllib.parse import urljoin, urlparse
 import requests
 import httpx
 from bs4 import BeautifulSoup
@@ -62,6 +63,9 @@ CSV_COLUMNS = [
     "source", "listing_url", "query", "scraped_at",
 ]
 
+EMAIL_RE = re.compile(r"(?i)\b[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}\b")
+CONTACT_LINK_HINTS = ("contact", "about", "reach", "support", "connect", "get-in-touch")
+
 # ── Text helpers ──────────────────────────────────────────────────────────────
 
 def clean(text: str) -> str:
@@ -70,6 +74,15 @@ def clean(text: str) -> str:
 def clean_phone(raw: str) -> str:
     digits = re.sub(r"[^\d+\-() ]", "", raw or "")
     return digits[:20].strip()
+
+
+def find_emails(text: str) -> List[str]:
+    seen = []
+    for match in EMAIL_RE.findall(text or ""):
+        email = clean(match).strip(".,;:()[]{}<>").lower()
+        if email and email not in seen:
+            seen.append(email)
+    return seen
 
 def rua() -> str:
     return random.choice(USER_AGENTS)
@@ -195,6 +208,106 @@ async def async_check_website(
     return "unreachable"
 
 
+def _extract_email_from_html(base_url: str, html: str) -> str:
+    soup = BeautifulSoup(html or "", "lxml")
+
+    mailtos = []
+    for tag in soup.find_all("a", href=True):
+        href = (tag.get("href") or "").strip()
+        if href.lower().startswith("mailto:"):
+            mailtos.extend(find_emails(href.replace("mailto:", "", 1)))
+    if mailtos:
+        return mailtos[0]
+
+    emails = find_emails(soup.get_text(" ", strip=True))
+    return emails[0] if emails else ""
+
+
+def _candidate_contact_links(base_url: str, html: str) -> List[str]:
+    soup = BeautifulSoup(html or "", "lxml")
+    parsed_base = urlparse(base_url)
+    links = []
+    for tag in soup.find_all("a", href=True):
+        href = (tag.get("href") or "").strip()
+        label = clean(tag.get_text(" ", strip=True)).lower()
+        haystack = f"{href.lower()} {label}"
+        if not any(token in haystack for token in CONTACT_LINK_HINTS):
+            continue
+        absolute = urljoin(base_url, href)
+        parsed = urlparse(absolute)
+        if parsed.netloc and parsed_base.netloc and parsed.netloc != parsed_base.netloc:
+            continue
+        if absolute not in links:
+            links.append(absolute)
+    return links[:2]
+
+
+async def async_extract_website_email(
+    url: str,
+    client: httpx.AsyncClient,
+    timeout: int = ASYNC_REQUEST_TIMEOUT,
+    retries: int = 2,
+) -> tuple[str, str]:
+    url = (url or "").strip()
+    if not url or url.lower() in ("", "n/a", "-", "none", "na", "not listed"):
+        return "", "no_website"
+
+    if not url.startswith(("http://", "https://")):
+        url = "https://" + url
+
+    for dom in SOCIAL_DOMAINS:
+        if dom in url.lower():
+            return "", "social_only"
+
+    last_error = ""
+    for attempt in range(retries):
+        try:
+            await asyncio.sleep(random.uniform(REQUEST_DELAY_MIN, REQUEST_DELAY_MAX))
+            response = await client.get(
+                url,
+                timeout=timeout,
+                follow_redirects=True,
+                headers={
+                    "User-Agent": rua(),
+                    "Accept": "text/html,application/xhtml+xml",
+                },
+            )
+            if response.status_code >= 400:
+                return "", "website_unreachable"
+
+            homepage_email = _extract_email_from_html(str(response.url), response.text)
+            if homepage_email:
+                return homepage_email, "homepage"
+
+            for contact_url in _candidate_contact_links(str(response.url), response.text):
+                try:
+                    await asyncio.sleep(random.uniform(REQUEST_DELAY_MIN, REQUEST_DELAY_MAX))
+                    contact_response = await client.get(
+                        contact_url,
+                        timeout=timeout,
+                        follow_redirects=True,
+                        headers={
+                            "User-Agent": rua(),
+                            "Accept": "text/html,application/xhtml+xml",
+                        },
+                    )
+                    if contact_response.status_code >= 400:
+                        continue
+                    contact_email = _extract_email_from_html(str(contact_response.url), contact_response.text)
+                    if contact_email:
+                        return contact_email, "contact_page"
+                except Exception:
+                    continue
+
+            return "", "not_found"
+        except httpx.TimeoutException:
+            last_error = "timeout"
+        except Exception as exc:
+            last_error = type(exc).__name__
+        await asyncio.sleep(0.25 * (attempt + 1))
+    return "", f"failed:{last_error or 'unknown'}"
+
+
 async def async_enrich_websites(
     leads: List[Lead],
     timeout: int = ASYNC_REQUEST_TIMEOUT,
@@ -209,14 +322,42 @@ async def async_enrich_websites(
 
     async with httpx.AsyncClient(timeout=client_timeout, verify=False) as client:
         async def _check(lead: Lead):
-            if lead.website_status:
-                return
             async with semaphore:
-                lead.website_status = await async_check_website(
-                    lead.website,
-                    client=client,
-                    timeout=timeout,
-                    retries=retries,
+                note = "skipped"
+                if not lead.website_status:
+                    lead.website_status = await async_check_website(
+                        lead.website,
+                        client=client,
+                        timeout=timeout,
+                        retries=retries,
+                    )
+                if not lead.website:
+                    note = "no_website"
+                elif lead.email:
+                    note = "email_present"
+                elif lead.website_status in ("no_website", "social_only", "unreachable"):
+                    note = "enrichment_skipped"
+                else:
+                    email, source = await async_extract_website_email(
+                        lead.website,
+                        client=client,
+                        timeout=timeout,
+                        retries=max(1, retries - 1),
+                    )
+                    if email:
+                        lead.email = email
+                        note = f"email_found:{source}"
+                    else:
+                        note = source or "not_found"
+                log.info(
+                    "Enrichment lead=%s source=%s phone_found=%s email_found=%s website=%s website_status=%s note=%s",
+                    clean(lead.name)[:80],
+                    lead.source or "-",
+                    bool(clean_phone(lead.phone)),
+                    bool(clean(lead.email)),
+                    bool(clean(lead.website)),
+                    lead.website_status or "",
+                    note,
                 )
 
         await asyncio.gather(*[_check(lead) for lead in leads])

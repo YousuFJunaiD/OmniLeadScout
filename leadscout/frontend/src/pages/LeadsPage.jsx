@@ -9,8 +9,8 @@ import { apiUrl } from "../lib/api"
 function normalizeLead(lead) {
   return {
     ...lead,
-    phone: lead?.phone || "Not Available",
-    email: lead?.email || "Not Available",
+    phone: lead?.phone || "",
+    email: lead?.email || "",
   }
 }
 
@@ -151,8 +151,8 @@ export default function LeadsPage({ user, onLogout }) {
                         <div style={{ fontWeight: 600, color: "var(--text-primary)" }}>{lead.name || "—"}</div>
                         <div className="lead-mobile-meta">
                           <div>City: {lead.city || "—"}</div>
-                          <div>Phone: {lead.phone || "Not Available"}</div>
-                          <div>Email: {lead.email || "Not Available"}</div>
+                          <div>Phone: {lead.phone || "—"}</div>
+                          <div>Email: {lead.email || "—"}</div>
                           <div>Source: {lead.source || "—"}</div>
                           <div>Status: {lead.website_status || "—"}</div>
                         </div>
@@ -185,8 +185,8 @@ export default function LeadsPage({ user, onLogout }) {
                         <tr key={lead.id}>
                           <td>{lead.name || "—"}</td>
                           <td>{lead.city || "—"}</td>
-                          <td>{lead.phone || "Not Available"}</td>
-                          <td>{lead.email || "Not Available"}</td>
+                          <td>{lead.phone || "—"}</td>
+                          <td>{lead.email || "—"}</td>
                           <td>{lead.source || "—"}</td>
                           <td>
                             {lead.website ? (

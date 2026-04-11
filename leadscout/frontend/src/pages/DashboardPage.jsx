@@ -514,8 +514,8 @@ export default function DashboardPage({ user, onLogout }) {
 
   const csvAllowed = canDownloadCsv(user)
 
-  const toDisplayPhone = (lead) => lead?.Phone || lead?.phone || "Not Available"
-  const toDisplayEmail = (lead) => lead?.Email || lead?.email || lead?.Owner_Email_Guesses?.split(" | ")[0] || "Not Available"
+  const toDisplayPhone = (lead) => lead?.Phone || lead?.phone || ""
+  const toDisplayEmail = (lead) => lead?.Email || lead?.email || lead?.Owner_Email_Guesses?.split(" | ")[0] || ""
 
   const toReadableError = (value, fallback = "Something went wrong") => {
     if (!value) return fallback
@@ -1634,8 +1634,8 @@ export default function DashboardPage({ user, onLogout }) {
                               <div style={{ fontWeight: 600, color: "var(--text-primary)" }}>{lead.Name || "—"}</div>
                               <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 4 }}>{lead.Category || lead.category || "Uncategorized"}</div>
                               <div className="dashboard-live-meta">
-                                <div>Phone: {toDisplayPhone(lead)}</div>
-                                <div>Email: {toDisplayEmail(lead)}</div>
+                                <div>Phone: {toDisplayPhone(lead) || "—"}</div>
+                                <div>Email: {toDisplayEmail(lead) || "—"}</div>
                                 <div style={{ color: wsColor }}>Web status: {lead.website_status || "—"}</div>
                                 <div style={{ color: srcColor }}>Source: {lead.source || "—"}</div>
                               </div>
@@ -1690,9 +1690,9 @@ export default function DashboardPage({ user, onLogout }) {
                                 <div style={{ fontWeight: 500 }}>{lead.Name||"—"}</div>
                                 <div style={{ fontSize:10,color:"var(--text-muted)" }}>{lead.Category||lead.category}</div>
                               </td>
-                              <td>{toDisplayPhone(lead)}</td>
+                              <td>{toDisplayPhone(lead) || "—"}</td>
                               <td style={{ maxWidth:140,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>
-                                {toDisplayEmail(lead)}
+                                {toDisplayEmail(lead) || "—"}
                               </td>
                               <td>
                                 {(lead.Website||lead.website) ? (

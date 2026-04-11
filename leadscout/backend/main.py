@@ -465,12 +465,11 @@ def _normalize_csv_value(value: object, fallback: str = "") -> str:
 def _csv_export_row(record: dict) -> dict:
     return {
         "name": _normalize_csv_value(record.get("name") or record.get("Name")),
-        "phone": _normalize_csv_value(record.get("phone") or record.get("Phone"), "Not Available"),
+        "phone": _normalize_csv_value(record.get("phone") or record.get("Phone")),
         "email": _normalize_csv_value(
             record.get("email")
             or record.get("Email")
-            or record.get("Owner_Email_Guesses"),
-            "Not Available",
+            or record.get("Owner_Email_Guesses")
         ),
         "website": _normalize_csv_value(record.get("website") or record.get("Website")),
         "city": _normalize_csv_value(record.get("city") or record.get("City")),
