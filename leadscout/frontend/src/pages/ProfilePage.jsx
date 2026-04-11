@@ -3,7 +3,8 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import Nav from "../components/Nav"
 import SparklesBg from "../components/SparklesBg"
-import { authFetch } from "../lib/auth"
+import { authFetch, canDownloadCsv, getAuthHeaders } from "../lib/auth"
+import { apiUrl } from "../lib/api"
 
 
 export default function ProfilePage({ user, onLogout }) {
@@ -18,6 +19,22 @@ export default function ProfilePage({ user, onLogout }) {
   const [viewingLoading, setViewingLoading] = useState(false)
   const pollingBusyRef = useRef(false)
   const authRequest = (url, options = {}) => authFetch(url, options, () => navigate("/login"))
+  const csvAllowed = canDownloadCsv(user)
+
+  const download = async (jobId, filename) => {
+    if (!csvAllowed) return
+    const res = await fetch(apiUrl(`/scrape/download/${jobId}`), {
+      method: "GET",
+      headers: getAuthHeaders({}),
+    })
+    const contentType = res.headers.get("content-type") || ""
+    if (!res.ok || !contentType.includes("text/csv")) return
+    const blob = await res.blob()
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement("a")
+    a.href = url; a.download = filename; a.click()
+    URL.revokeObjectURL(url)
+  }
 
   const getTotalAreas = (job) => {
     const fromField = Number(job.total_areas || 0)
@@ -187,20 +204,16 @@ export default function ProfilePage({ user, onLogout }) {
     }
   }
 
-  const download = async (jobId, filename) => {
-    const res  = await authRequest(`/scrape/download/${jobId}`)
-    const blob = await res.blob()
-    const url  = URL.createObjectURL(blob)
-    const a    = document.createElement("a")
-    a.href = url; a.download = filename; a.click()
-    URL.revokeObjectURL(url)
-  }
-
   const downloadAll = async () => {
+    if (!csvAllowed) return
     setDownloadingAll(true)
     try {
-      const res = await authRequest(`/scrape/download/all/${user.id}`)
-      if (!res.ok) return
+      const res = await fetch(apiUrl(`/scrape/download/all/${user.id}`), {
+        method: "GET",
+        headers: getAuthHeaders({}),
+      })
+      const contentType = res.headers.get("content-type") || ""
+      if (!res.ok || !contentType.includes("text/csv")) return
       const blob = await res.blob()
       const url = URL.createObjectURL(blob)
       const a = document.createElement("a")
@@ -272,9 +285,11 @@ export default function ProfilePage({ user, onLogout }) {
               <p style={{ fontSize: 10, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--text-muted)", marginBottom: 0 }}>Scrape History</p>
               <div style={{ display: "flex", gap: 8 }}>
                 <button className="btn btn-ghost" style={{ padding: "6px 12px", fontSize: 11 }} onClick={() => navigate("/dashboard")}>Start Fresh Scrape</button>
-                <button className="btn btn-ghost" style={{ padding: "6px 12px", fontSize: 11 }} onClick={downloadAll} disabled={downloadingAll}>
-                  {downloadingAll ? "Preparing..." : "Download All Scraped CSV"}
-                </button>
+                {csvAllowed && (
+                  <button className="btn btn-ghost" style={{ padding: "6px 12px", fontSize: 11 }} onClick={downloadAll} disabled={downloadingAll}>
+                    {downloadingAll ? "Preparing..." : "Download All Scraped CSV"}
+                  </button>
+                )}
               </div>
             </div>
             {loading ? (
@@ -303,7 +318,7 @@ export default function ProfilePage({ user, onLogout }) {
                         {((h.status==="completed" || h.status==="stopped" || h.status==="no_results") && Number(h.effective_lead_count||0) > 0) && (
                           <>
                             <button className="btn btn-ghost" style={{ padding:"4px 12px",fontSize:11 }} onClick={() => viewLeads(h)}>View Data</button>
-                            <button className="btn btn-ghost" style={{ padding:"4px 12px",fontSize:11 }} onClick={() => download(h.job_id,`${h.profession}_${h.job_id?.slice(0,8)}.csv`)}>CSV</button>
+                            {csvAllowed && <button className="btn btn-ghost" style={{ padding:"4px 12px",fontSize:11 }} onClick={() => download(h.job_id,`${h.profession}_${h.job_id?.slice(0,8)}.csv`)}>CSV</button>}
                             <button className="btn btn-ghost" style={{ padding:"4px 12px",fontSize:11, color: "var(--accent-red)" }} onClick={() => deleteJob(h.job_id)}>Delete</button>
                           </>
                         )}
@@ -348,7 +363,7 @@ export default function ProfilePage({ user, onLogout }) {
                               {((h.status==="completed" || h.status==="stopped" || h.status==="no_results") && Number(h.effective_lead_count||0) > 0) && (
                                 <>
                                   <button className="btn btn-ghost" style={{ padding:"4px 12px",fontSize:11 }} onClick={() => viewLeads(h)}>👁 View Data</button>
-                                  <button className="btn btn-ghost" style={{ padding:"4px 12px",fontSize:11 }} onClick={() => download(h.job_id,`${h.profession}_${h.job_id?.slice(0,8)}.csv`)}>↓ CSV</button>
+                                  {csvAllowed && <button className="btn btn-ghost" style={{ padding:"4px 12px",fontSize:11 }} onClick={() => download(h.job_id,`${h.profession}_${h.job_id?.slice(0,8)}.csv`)}>↓ CSV</button>}
                                   <button className="btn btn-ghost" style={{ padding:"4px 12px",fontSize:11, color: "var(--accent-red)" }} onClick={() => deleteJob(h.job_id)}>🗑 Delete</button>
                                 </>
                               )}
@@ -395,7 +410,7 @@ export default function ProfilePage({ user, onLogout }) {
               </p>
             </div>
             <div style={{ display: "flex", gap: 12 }}>
-              <button className="btn btn-primary" onClick={() => download(viewingJob.job_id, `${viewingJob.profession}_auto.csv`)}>Download CSV</button>
+              {csvAllowed && <button className="btn btn-primary" onClick={() => download(viewingJob.job_id, `${viewingJob.profession}_auto.csv`)}>Download CSV</button>}
               <button className="btn btn-ghost" onClick={() => setViewingJob(null)}>Close</button>
             </div>
           </div>

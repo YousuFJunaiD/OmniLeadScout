@@ -454,6 +454,39 @@ def build_job_csv_path(niche: str, job_id: str) -> str:
     return str(OUTPUT_DIR / f"{_safe_slug(niche)}_{job_id[:8]}.csv")
 
 
+CSV_EXPORT_HEADERS = ["name", "phone", "email", "website", "city", "category", "source"]
+
+
+def _normalize_csv_value(value: object, fallback: str = "") -> str:
+    text = str(value or "").strip()
+    return text or fallback
+
+
+def _csv_export_row(record: dict) -> dict:
+    return {
+        "name": _normalize_csv_value(record.get("name") or record.get("Name")),
+        "phone": _normalize_csv_value(record.get("phone") or record.get("Phone"), "Not Available"),
+        "email": _normalize_csv_value(
+            record.get("email")
+            or record.get("Email")
+            or record.get("Owner_Email_Guesses"),
+            "Not Available",
+        ),
+        "website": _normalize_csv_value(record.get("website") or record.get("Website")),
+        "city": _normalize_csv_value(record.get("city") or record.get("City")),
+        "category": _normalize_csv_value(record.get("category") or record.get("Category")),
+        "source": _normalize_csv_value(record.get("source") or record.get("Source")),
+    }
+
+
+def _can_download_csv_for_user(user: dict) -> bool:
+    role = str(user.get("role") or "user").strip().lower()
+    if role == "admin":
+        return True
+    plan = str(user.get("plan") or "starter").strip().lower()
+    return plan in {"pro", "growth", "team"}
+
+
 async def _send_welcome_email(user: dict):
     await send_email(
         user.get("email", ""),
@@ -557,22 +590,13 @@ def generate_job_csv_from_db(job_id: str, niche: str) -> Optional[str]:
     if not records:
         return None
 
-    fieldnames = []
-    seen_fields = set()
-    for rec in records:
-        for key in rec.keys():
-            if key not in seen_fields:
-                seen_fields.add(key)
-                fieldnames.append(key)
-
-    if not fieldnames:
-        return None
+    rows = [_csv_export_row(rec) for rec in records]
 
     csv_path = build_job_csv_path(niche, job_id)
     with open(csv_path, "w", newline="", encoding="utf-8-sig") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
+        writer = csv.DictWriter(f, fieldnames=CSV_EXPORT_HEADERS, extrasaction="ignore")
         writer.writeheader()
-        writer.writerows(records)
+        writer.writerows(rows)
 
     return csv_path
 
@@ -580,22 +604,12 @@ def generate_job_csv_from_db(job_id: str, niche: str) -> Optional[str]:
 def _write_records_to_csv(records: list[dict], export_path: Path) -> Optional[str]:
     if not records:
         return None
-
-    fieldnames = []
-    seen_fields = set()
-    for rec in records:
-        for key in rec.keys():
-            if key not in seen_fields:
-                seen_fields.add(key)
-                fieldnames.append(key)
-
-    if not fieldnames:
-        return None
+    rows = [_csv_export_row(rec) for rec in records]
 
     with open(export_path, "w", newline="", encoding="utf-8-sig") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
+        writer = csv.DictWriter(f, fieldnames=CSV_EXPORT_HEADERS, extrasaction="ignore")
         writer.writeheader()
-        writer.writerows(records)
+        writer.writerows(rows)
 
     return str(export_path)
 
@@ -1306,7 +1320,7 @@ class SelectPlanBody(BaseModel):
     @classmethod
     def validate_plan(cls, value: str):
         cleaned = (value or "").strip().lower()
-        if cleaned not in ("starter", "pro", "growth", "enterprise"):
+        if cleaned not in ("starter", "pro", "growth", "team"):
             raise ValueError("Invalid plan")
         return cleaned
 
@@ -1397,7 +1411,7 @@ class UpdateUserBody(BaseModel):
         if value in (None, ""):
             return None
         cleaned = value.strip().lower()
-        if cleaned not in ("starter", "pro", "growth", "enterprise"):
+        if cleaned not in ("starter", "pro", "growth", "team"):
             raise ValueError("Invalid plan")
         return cleaned
 
@@ -1713,7 +1727,7 @@ async def run_job_v2(job_id: str):
         plan = (get_cached_user(user_id) or {}).get("plan", "free").lower()
         if plan == "starter": concurrency = 2
         elif plan == "pro": concurrency = 5
-        elif plan in ("agency", "enterprise"): concurrency = 10
+        elif plan in ("growth", "team"): concurrency = 10
         else: concurrency = 1
         scrape_semaphore = asyncio.Semaphore(concurrency)
         work_items = []
@@ -2064,7 +2078,7 @@ async def start_scrape_v2(body: ScrapeV2Body, background_tasks: BackgroundTasks,
 
     plan = (usage.get("plan") or "free").lower()
     is_admin = (current_user.get("role") or "user").lower() == "admin"
-    max_jobs = 999 if is_admin else 2 if plan == "starter" else 3 if plan == "pro" else 5 if plan in ("agency", "enterprise") else 1
+    max_jobs = 999 if is_admin else 2 if plan == "starter" else 3 if plan == "pro" else 5 if plan in ("growth", "team") else 1
     history_rows = list_user_history_supabase(user_id)
     active_for_user = sum(1 for row in history_rows if (row.get("status") or "").lower() in ("pending", "queued", "running", "stopping"))
     
@@ -2293,7 +2307,7 @@ def reset_password(body: ResetPasswordBody, request: Request):
 @app.post("/user/select-plan")
 def select_plan(body: SelectPlanBody, current_user=Depends(get_current_user)):
     plan = (body.plan or "").strip().lower()
-    if plan not in ("starter", "pro", "growth", "enterprise"):
+    if plan not in ("starter", "pro", "growth", "team"):
         raise HTTPException(400, "Invalid plan")
     user = update_user_plan(current_user["id"], plan)
     public_user = _public_user(user)
@@ -2394,7 +2408,7 @@ async def start_scrape(body: ScrapeBody, current_user=Depends(get_current_user))
 
     plan = (usage.get("plan") or "free").lower()
     is_admin = (current_user.get("role") or "user").lower() == "admin"
-    max_jobs = 999 if is_admin else 2 if plan == "starter" else 3 if plan == "pro" else 5 if plan in ("agency", "enterprise") else 1
+    max_jobs = 999 if is_admin else 2 if plan == "starter" else 3 if plan == "pro" else 5 if plan in ("growth", "team") else 1
     active_for_user = sum(1 for j in active_jobs.values() if j.get("user_id") == user_id and j.get("status") in ("pending", "running", "stopping"))
     
     if active_for_user >= max_jobs:
@@ -2728,6 +2742,8 @@ def scrape_status(job_id: str, current_user=Depends(get_current_user)):
 
 @app.get("/scrape/download/{job_id}")
 def download_csv(job_id: str, current_user=Depends(get_current_user)):
+    if not _can_download_csv_for_user(current_user):
+        raise HTTPException(403, "CSV export is available on Golden, Team, or Admin accounts only")
     conn = get_db()
     job  = conn.execute("SELECT * FROM jobs WHERE job_id=?", (job_id,)).fetchone()
     conn.close()
@@ -2753,7 +2769,10 @@ def download_csv(job_id: str, current_user=Depends(get_current_user)):
 
 @app.get("/scrape/download/all/{user_id}")
 def download_all_csv(user_id: str, current_user=Depends(get_current_user)):
-    if user_id != current_user["id"]:
+    if not _can_download_csv_for_user(current_user):
+        raise HTTPException(403, "CSV export is available on Golden, Team, or Admin accounts only")
+    is_admin = (current_user.get("role") or "user").lower() == "admin"
+    if user_id != current_user["id"] and not is_admin:
         raise HTTPException(403, "Access denied")
     conn = get_db()
     job_rows = conn.execute(
@@ -2778,7 +2797,10 @@ def download_all_csv(user_id: str, current_user=Depends(get_current_user)):
 
 @app.get("/scrape/download/niche/{user_id}/{niche}")
 def download_niche_csv(user_id: str, niche: str, current_user=Depends(get_current_user)):
-    if user_id != current_user["id"]:
+    if not _can_download_csv_for_user(current_user):
+        raise HTTPException(403, "CSV export is available on Golden, Team, or Admin accounts only")
+    is_admin = (current_user.get("role") or "user").lower() == "admin"
+    if user_id != current_user["id"] and not is_admin:
         raise HTTPException(403, "Access denied")
     path = generate_niche_csv_for_user(user_id, niche)
     if not path:
@@ -2788,7 +2810,10 @@ def download_niche_csv(user_id: str, niche: str, current_user=Depends(get_curren
 
 @app.get("/scrape/download/merged/{user_id}")
 def download_merged_job_ids_csv(user_id: str, job_ids: str, current_user=Depends(get_current_user)):
-    if user_id != current_user["id"]:
+    if not _can_download_csv_for_user(current_user):
+        raise HTTPException(403, "CSV export is available on Golden, Team, or Admin accounts only")
+    is_admin = (current_user.get("role") or "user").lower() == "admin"
+    if user_id != current_user["id"] and not is_admin:
         raise HTTPException(403, "Access denied")
     parsed_ids = [j.strip() for j in (job_ids or "").split(",") if j.strip()]
     if not parsed_ids:

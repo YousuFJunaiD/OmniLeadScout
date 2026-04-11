@@ -3,7 +3,8 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import Nav from "../components/Nav"
 import SparklesBg from "../components/SparklesBg"
-import { authFetch } from "../lib/auth"
+import { authFetch, canDownloadCsv, getAuthHeaders } from "../lib/auth"
+import { apiUrl } from "../lib/api"
 
 const WS_BASE = `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}/api`
 const LIVE_FEED_MAX_ROWS = 200
@@ -471,6 +472,7 @@ export default function DashboardPage({ user, onLogout }) {
   const [runtimeStatus, setRuntimeStatus] = useState("")
   const [runtimeErrorDetails, setRuntimeErrorDetails] = useState(null)
   const [feedMessages, setFeedMessages] = useState([])
+  const [csvBusy, setCsvBusy] = useState(false)
 
   // ── v2 multi-platform config ──────────────────────────────
   const [queries, setQueries]           = useState(["dentist"])
@@ -510,6 +512,11 @@ export default function DashboardPage({ user, onLogout }) {
   const authRequest = (url, options = {}) =>
     authFetch(url, options, () => navigate("/login"))
 
+  const csvAllowed = canDownloadCsv(user)
+
+  const toDisplayPhone = (lead) => lead?.Phone || lead?.phone || "Not Available"
+  const toDisplayEmail = (lead) => lead?.Email || lead?.email || lead?.Owner_Email_Guesses?.split(" | ")[0] || "Not Available"
+
   const toReadableError = (value, fallback = "Something went wrong") => {
     if (!value) return fallback
     if (typeof value === "string") return value
@@ -527,10 +534,16 @@ export default function DashboardPage({ user, onLogout }) {
   }
 
   const getStatusMessage = (status, fallback = "") => {
-    if (fallback) return fallback
-    if (status === "pending") return "Initializing..."
-    if (status === "running") return "Searching sources..."
-    if (status === "completed") return "Saving leads complete."
+    if (fallback) {
+      const text = String(fallback).toLowerCase()
+      if (text.includes("saving")) return "Finalizing..."
+      if (text.includes("process")) return "Processing leads..."
+      if (text.includes("search") || text.includes("fetch")) return "Fetching results..."
+      return fallback
+    }
+    if (status === "pending") return "Fetching results..."
+    if (status === "running") return "Processing leads..."
+    if (status === "completed") return "Finalizing..."
     if (status === "no_results") return "No data found. Try broader query or different location."
     if (status === "low_data") return "Low data found. Try broader query or different location."
     if (status === "source_error") return "Source timeout or block detected. Try broader query or different location."
@@ -937,8 +950,8 @@ export default function DashboardPage({ user, onLogout }) {
     setRuntimeErrorDetails(null)
     setStats({ total: 0, withOwner: 0, withEmail: 0, withWebsite: 0 })
     setProgress({ current: 0, total: finalQueries.length * Object.values(requestedPlatforms).filter(Boolean).length, query: "" })
-    pushFeedMessage("Launching scrape…")
-    setRuntimeStatus("Queueing scrape…")
+    pushFeedMessage("Fetching results...")
+    setRuntimeStatus("Fetching results...")
     try {
       const res = await authRequest(`/scrape/v2/start`, {
         method: "POST",
@@ -1001,7 +1014,7 @@ export default function DashboardPage({ user, onLogout }) {
       setJobId(data.job_id)
       localStorage.setItem(ACTIVE_JOB_KEY, data.job_id)
       attachSocket(data.job_id, { reset: true })
-      pushFeedMessage(`Scrape job ${data.job_id.slice(0, 8)} queued.`)
+      pushFeedMessage("Processing leads...")
     } catch (error) {
       setScraping(false)
       setRuntimeErrorDetails(null)
@@ -1032,13 +1045,36 @@ export default function DashboardPage({ user, onLogout }) {
   }
 
   const downloadCSV = async () => {
-    if (!jobId) return
-    const res  = await authRequest(`/scrape/download/${jobId}`)
-    const blob = await res.blob()
-    const url  = URL.createObjectURL(blob)
-    const a    = document.createElement("a")
-    a.href = url; a.download = `leads_${Date.now()}.csv`; a.click()
-    URL.revokeObjectURL(url)
+    if (!jobId || csvBusy || !csvAllowed) return
+    setCsvBusy(true)
+    try {
+      const res = await fetch(apiUrl(`/scrape/download/${jobId}`), {
+        method: "GET",
+        headers: getAuthHeaders({}),
+      })
+      const contentType = res.headers.get("content-type") || ""
+      if (!res.ok || !contentType.includes("text/csv")) {
+        let message = "CSV is not ready yet."
+        try {
+          const payload = await res.json()
+          message = toReadableError(payload?.message || payload?.error || payload?.detail || payload, message)
+        } catch {}
+        throw new Error(message)
+      }
+      const blob = await res.blob()
+      const url  = URL.createObjectURL(blob)
+      const a    = document.createElement("a")
+      a.href = url
+      a.download = `leads_${Date.now()}.csv`
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch (error) {
+      const message = toReadableError(error?.message, "CSV is not ready yet.")
+      setRuntimeStatus(message)
+      pushFeedMessage(message, "warn")
+    } finally {
+      setCsvBusy(false)
+    }
   }
 
   const deleteJob = async (targetJobId) => {
@@ -1458,9 +1494,14 @@ export default function DashboardPage({ user, onLogout }) {
                     </button>
                   </>
                 )}
-                {jobId && canDownload && !scraping && (
-                  <button className="btn btn-ghost" style={{ width: "100%", padding: 12, fontSize: 13, justifyContent: "center" }} onClick={downloadCSV}>
-                    ↓ Download CSV
+                {csvAllowed && jobId && canDownload && !scraping && (
+                  <button
+                    className="btn btn-ghost"
+                    style={{ width: "100%", padding: 12, fontSize: 13, justifyContent: "center" }}
+                    onClick={downloadCSV}
+                    disabled={csvBusy}
+                  >
+                    {csvBusy ? "Preparing CSV..." : "↓ Download CSV"}
                   </button>
                 )}
               </div>
@@ -1515,7 +1556,7 @@ export default function DashboardPage({ user, onLogout }) {
                   <div className="dashboard-progress-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                       {scraping && <span className="stat-pill"><span className="dot" /> Running</span>}
-                      <span style={{ fontSize: 13, color: "var(--text-secondary)" }}>{progress.query || runtimeStatus || "Initializing..."}</span>
+                      <span style={{ fontSize: 13, color: "var(--text-secondary)" }}>{progress.query || runtimeStatus || "Fetching results..."}</span>
                     </div>
                     <span style={{ fontSize: 13, fontFamily: "var(--font-mono)", color: "var(--accent-cyan)" }}>{progress.current}/{progress.total}</span>
                   </div>
@@ -1593,8 +1634,8 @@ export default function DashboardPage({ user, onLogout }) {
                               <div style={{ fontWeight: 600, color: "var(--text-primary)" }}>{lead.Name || "—"}</div>
                               <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 4 }}>{lead.Category || lead.category || "Uncategorized"}</div>
                               <div className="dashboard-live-meta">
-                                <div>Phone: {lead.Phone || lead.phone || "—"}</div>
-                                <div>Email: {lead.Email || lead.email || lead.Owner_Email_Guesses?.split(" | ")[0] || "—"}</div>
+                                <div>Phone: {toDisplayPhone(lead)}</div>
+                                <div>Email: {toDisplayEmail(lead)}</div>
                                 <div style={{ color: wsColor }}>Web status: {lead.website_status || "—"}</div>
                                 <div style={{ color: srcColor }}>Source: {lead.source || "—"}</div>
                               </div>
@@ -1649,9 +1690,9 @@ export default function DashboardPage({ user, onLogout }) {
                                 <div style={{ fontWeight: 500 }}>{lead.Name||"—"}</div>
                                 <div style={{ fontSize:10,color:"var(--text-muted)" }}>{lead.Category||lead.category}</div>
                               </td>
-                              <td>{lead.Phone||lead.phone||"—"}</td>
+                              <td>{toDisplayPhone(lead)}</td>
                               <td style={{ maxWidth:140,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>
-                                {lead.Email||lead.email||lead.Owner_Email_Guesses?.split(" | ")[0]||"—"}
+                                {toDisplayEmail(lead)}
                               </td>
                               <td>
                                 {(lead.Website||lead.website) ? (
@@ -1719,19 +1760,44 @@ export default function DashboardPage({ user, onLogout }) {
                           </div>
                         </div>
                         <div className="dashboard-history-actions" style={{ display: "flex", gap: 6 }}>
-                          {(h.effective_lead_count || h.lead_count || 0) > 0 && (
+                          {csvAllowed && (h.effective_lead_count || h.lead_count || 0) > 0 && (
                             <button
                               className="btn btn-ghost"
                               style={{ padding: "4px 10px", fontSize: 11 }}
                               onClick={async () => {
-                                const res = await authRequest(`/scrape/download/${h.job_id}`)
-                                const blob = await res.blob()
-                                const url = URL.createObjectURL(blob)
-                                const a = document.createElement("a")
-                                a.href = url; a.download = `leads_${h.niche || "job"}.csv`; a.click()
-                                URL.revokeObjectURL(url)
+                                if (!csvAllowed || csvBusy) return
+                                setCsvBusy(true)
+                                try {
+                                  const res = await fetch(apiUrl(`/scrape/download/${h.job_id}`), {
+                                    method: "GET",
+                                    headers: getAuthHeaders({}),
+                                  })
+                                  const contentType = res.headers.get("content-type") || ""
+                                  if (!res.ok || !contentType.includes("text/csv")) {
+                                    let message = "CSV is not ready yet."
+                                    try {
+                                      const payload = await res.json()
+                                      message = toReadableError(payload?.message || payload?.error || payload?.detail || payload, message)
+                                    } catch {}
+                                    throw new Error(message)
+                                  }
+                                  const blob = await res.blob()
+                                  const url = URL.createObjectURL(blob)
+                                  const a = document.createElement("a")
+                                  a.href = url
+                                  a.download = `leads_${h.niche || "job"}.csv`
+                                  a.click()
+                                  URL.revokeObjectURL(url)
+                                } catch (error) {
+                                  const message = toReadableError(error?.message, "CSV is not ready yet.")
+                                  setRuntimeStatus(message)
+                                  pushFeedMessage(message, "warn")
+                                } finally {
+                                  setCsvBusy(false)
+                                }
                               }}
-                            >↓ CSV</button>
+                              disabled={csvBusy}
+                            >{csvBusy ? "Preparing..." : "↓ CSV"}</button>
                           )}
                           <button
                             className="btn btn-danger"

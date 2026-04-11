@@ -79,6 +79,13 @@ export function clearAuth() {
   }
 }
 
+export function canDownloadCsv(user) {
+  const role = String(user?.role || "user").trim().toLowerCase()
+  if (role === "admin") return true
+  const plan = String(user?.plan || "starter").trim().toLowerCase()
+  return ["pro", "growth", "team"].includes(plan)
+}
+
 export function isTokenExpired(token) {
   if (!token) return true
   try {

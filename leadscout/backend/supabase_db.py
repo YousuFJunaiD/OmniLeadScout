@@ -30,7 +30,7 @@ PLAN_LIMITS = {
         "searches": float("inf"),
         "platforms": ["google_maps", "justdial", "web"],
     },
-    "enterprise": {
+    "team": {
         "leads": float("inf"),
         "searches": float("inf"),
         "platforms": ["google_maps", "justdial", "web"],
