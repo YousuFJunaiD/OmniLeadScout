@@ -161,7 +161,7 @@ def _final_status(cancelled: bool, total_found: int, total_saved: int, source_fa
     if total_found <= 0 and total_saved <= 0:
         return "no_results"
     if total_found > 0 and total_saved <= 0:
-        return "low_data"
+        return "completed"
     return "completed"
 
 
@@ -171,7 +171,7 @@ def _final_status_message(status: str) -> str:
     if status == "no_results":
         return "No data found. Try broader query or different location."
     if status == "low_data":
-        return "Low data found. Results were filtered out. Try broader query or different location."
+        return "Limited contact data available, showing best matches"
     if status == "source_error":
         return "Source timeout or block detected. Try broader query or different location."
     if status == "stopped":
@@ -740,7 +740,7 @@ async def process_job(job_row: Dict[str, Any]) -> None:
                 await asyncio.sleep(float(speed_profile["batch_delay"]))
 
         if total_found > 0 and int(state.get("saved_count", 0)) <= 0:
-            fallback_limit = max(1, min(effective_max_per_query, max(10, len(queries))))
+            fallback_limit = max(1, min(20, len(fallback_pool)))
             fallback_batch = rank_and_deduplicate_leads(
                 fallback_pool,
                 user_plan,

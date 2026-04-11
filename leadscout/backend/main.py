@@ -724,7 +724,7 @@ def resolve_final_job_status(cancelled: bool, total_found: int, accepted_leads: 
     if total_found <= 0 and accepted_leads <= 0:
         return "no_results"
     if total_found > 0 and accepted_leads <= 0:
-        return "low_data"
+        return "completed"
     return "completed"
 
 
@@ -734,7 +734,7 @@ def final_status_message(status: str) -> str:
     if status == "no_results":
         return "No data found. Try broader query or different location."
     if status == "low_data":
-        return "Low data found. Results were filtered out. Try broader query or different location."
+        return "Limited contact data available, showing best matches"
     if status == "source_error":
         return "Source timeout or block detected. Try broader query or different location."
     if status == "stopped":
@@ -2006,7 +2006,7 @@ async def run_job_v2(job_id: str):
             })
 
         if total_raw_found > 0 and accepted_leads <= 0:
-            fallback_limit = max(1, min(max_per_query, max(10, len(queries))))
+            fallback_limit = max(1, min(20, len(fallback_pool)))
             fallback_batch = rank_and_deduplicate_leads(
                 fallback_pool,
                 plan,

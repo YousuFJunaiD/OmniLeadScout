@@ -119,12 +119,18 @@ def has_meaningful_contact_value(lead: Lead) -> bool:
 
 
 def is_usable_lead(lead: Lead) -> bool:
+    name = bool(clean(lead.name))
     phone = bool(clean_phone(lead.phone))
     email = bool(clean(lead.email))
     website = bool(clean(lead.website))
+    listing_url = bool(clean(lead.listing_url))
+    city = bool(clean(lead.city))
     strong_meta = has_strong_business_metadata(lead)
 
-    if phone or email or website:
+    if name and (city or listing_url):
+        return True
+
+    if phone or email or website or listing_url:
         return True
     if strong_meta and not looks_weak_listing(lead):
         return True
@@ -150,9 +156,12 @@ def looks_weak_listing(lead: Lead) -> bool:
 
 def lead_quality_score(lead: Lead) -> int:
     score = 0
+    name = bool(clean(lead.name))
     phone = bool(clean_phone(lead.phone))
     email = bool(clean(lead.email))
     website = bool(clean(lead.website))
+    listing_url = bool(clean(lead.listing_url))
+    city = bool(clean(lead.city))
     category = bool(clean(lead.category))
     location_meta = bool(clean(lead.address) or clean(lead.city))
     strong_meta = has_strong_business_metadata(lead)
@@ -163,11 +172,15 @@ def lead_quality_score(lead: Lead) -> int:
         score += 4
     if website:
         score += 4
+    if listing_url:
+        score += 3
     if category:
         score += 2
     if location_meta:
         score += 2
     if strong_meta:
+        score += 2
+    if name and city:
         score += 2
     if lead.source == "justdial":
         score += 2
@@ -179,11 +192,11 @@ def lead_quality_score(lead: Lead) -> int:
         score += 2
     if website and strong_meta:
         score += 1
-    if not phone and not email and not website:
+    if not phone and not email and not website and not listing_url:
         score -= 3
-    if looks_weak_listing(lead) and not (phone or email or website):
+    if looks_weak_listing(lead) and not (phone or email or website or listing_url):
         score -= 3
-    if not strong_meta and not (phone or email or website):
+    if not strong_meta and not (phone or email or website or listing_url):
         score -= 2
     return score
 
@@ -200,21 +213,19 @@ def should_keep_quality(lead: Lead, plan: str, role: str = "user") -> bool:
     normalized_role = clean(role).lower() or "user"
     normalized_plan = clean(plan).lower() or "starter"
     if normalized_role == "admin" or normalized_plan in {"growth", "team"}:
-        if is_usable_lead(lead):
-            return True
-        return lead_quality_score(lead) >= 4 and not looks_weak_listing(lead)
+        return is_usable_lead(lead)
     if normalized_plan == "pro":
-        if is_usable_lead(lead):
-            return True
-        return lead_quality_score(lead) >= 2 and not looks_weak_listing(lead)
+        return is_usable_lead(lead)
     return True
 
 
 def fallback_keep_quality(lead: Lead) -> bool:
     if not is_usable_lead(lead):
         return False
+    if clean(lead.name) and (clean(lead.city) or clean(lead.listing_url)):
+        return True
     if looks_weak_listing(lead) and not (
-        clean_phone(lead.phone) or clean(lead.email) or clean(lead.website)
+        clean_phone(lead.phone) or clean(lead.email) or clean(lead.website) or clean(lead.listing_url)
     ):
         return False
     return True
@@ -227,8 +238,8 @@ def lead_sort_key(lead: Lead) -> Tuple[int, int, int, int, int, int]:
         1 if clean_phone(lead.phone) else 0,
         1 if clean(lead.email) else 0,
         1 if clean(lead.website) else 0,
+        1 if clean(lead.listing_url) else 0,
         1 if has_strong_business_metadata(lead) else 0,
-        1 if lead.source in {"justdial", "indiamart"} else 0,
     )
 
 
@@ -545,6 +556,8 @@ async def async_enrich_websites(
 
 def should_keep(lead: Lead, mode: str) -> bool:
     """Filter by website status based on config.WEBSITE_FILTER."""
+    if is_usable_lead(lead):
+        return True
     if mode == "all":
         return True
     if mode == "no_website":

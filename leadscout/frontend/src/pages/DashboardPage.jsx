@@ -573,7 +573,7 @@ export default function DashboardPage({ user, onLogout }) {
     if (status === "running") return "Processing leads..."
     if (status === "completed") return "Finalizing..."
     if (status === "no_results") return "No data found. Try broader query or different location."
-    if (status === "low_data") return "Low data found. Try broader query or different location."
+    if (status === "low_data") return "Limited contact data available, showing best matches"
     if (status === "source_error") return "Source timeout or block detected. Try broader query or different location."
     if (status === "failed") return "Scrape failed. Try broader query or different location."
     if (status === "stopped") return "Scrape stopped."
