@@ -43,6 +43,7 @@ from supabase_db import (
     get_scrape_job,
     get_user_by_email,
     get_user_by_id,
+    list_job_leads,
     list_all_users,
     list_user_history as list_user_history_supabase,
     list_user_leads,
@@ -587,6 +588,9 @@ def generate_job_csv_from_db(job_id: str, niche: str) -> Optional[str]:
             continue
 
     if not records:
+        records = list_job_leads(job_id)
+
+    if not records:
         return None
 
     rows = [_csv_export_row(rec) for rec in records]
@@ -630,11 +634,20 @@ def _collect_records_by_job_ids(job_ids: list[str], user_id: Optional[str] = Non
     conn.close()
 
     records = []
+    local_job_ids_with_records = set()
     for row in rows:
         try:
-            records.append(json.loads(row["data"]))
+            parsed = json.loads(row["data"])
+            records.append(parsed)
+            job_id = parsed.get("job_id") or parsed.get("jobId")
+            if job_id:
+                local_job_ids_with_records.add(str(job_id))
         except Exception:
             continue
+
+    missing_job_ids = [job_id for job_id in job_ids if job_id not in local_job_ids_with_records]
+    for job_id in missing_job_ids:
+        records.extend(list_job_leads(job_id, user_id=user_id))
     return records
 
 
@@ -647,6 +660,9 @@ def generate_niche_csv_for_user(user_id: str, niche: str) -> Optional[str]:
     conn.close()
 
     job_ids = [r["job_id"] for r in job_rows if r and r["job_id"]]
+    if not job_ids:
+        history_rows = list_user_history_supabase(user_id)
+        job_ids = [row.get("job_id") for row in history_rows if (row.get("niche") or "") == niche and row.get("job_id")]
     records = _collect_records_by_job_ids(job_ids, user_id=user_id)
     export_path = OUTPUT_DIR / f"{_safe_slug(niche)}_{_safe_slug(user_id)}_combined.csv"
     return _write_records_to_csv(records, export_path)
@@ -2747,20 +2763,23 @@ def download_csv(job_id: str, current_user=Depends(get_current_user)):
     conn = get_db()
     job  = conn.execute("SELECT * FROM jobs WHERE job_id=?", (job_id,)).fetchone()
     conn.close()
-    if not job:
+    remote_job = get_scrape_job(job_id)
+    if not job and not remote_job:
         raise HTTPException(404, "Job not found")
-    if job["user_id"] != current_user["id"] and (current_user.get("role") or "user").lower() != "admin":
+    owner_user_id = (job["user_id"] if job else remote_job.get("user_id")) if (job or remote_job) else None
+    if owner_user_id != current_user["id"] and (current_user.get("role") or "user").lower() != "admin":
         raise HTTPException(403, "Access denied")
 
-    csv_path = job["csv_path"]
+    csv_path = job["csv_path"] if job else None
     if not csv_path or not Path(csv_path).exists():
-        generated = generate_job_csv_from_db(job_id, job["niche"] or "leads")
+        generated = generate_job_csv_from_db(job_id, (job["niche"] if job else None) or (remote_job.get("niche") if remote_job else None) or "leads")
         if generated:
             csv_path = generated
-            conn = get_db()
-            conn.execute("UPDATE jobs SET csv_path=? WHERE job_id=?", (csv_path, job_id))
-            conn.commit()
-            conn.close()
+            if job:
+                conn = get_db()
+                conn.execute("UPDATE jobs SET csv_path=? WHERE job_id=?", (csv_path, job_id))
+                conn.commit()
+                conn.close()
         else:
             raise HTTPException(404, "CSV not ready yet")
 
@@ -2784,6 +2803,8 @@ def download_all_csv(user_id: str, current_user=Depends(get_current_user)):
     job_ids = [r["job_id"] for r in job_rows if r and r["job_id"]]
     records = _collect_records_by_job_ids(job_ids, user_id=user_id)
 
+    if not records:
+        records = list_user_leads(user_id)
     if not records:
         raise HTTPException(404, "No scraped leads found for this user")
 
@@ -2827,6 +2848,9 @@ def download_merged_job_ids_csv(user_id: str, job_ids: str, current_user=Depends
     conn.close()
 
     allowed_ids = [r["job_id"] for r in rows if r and r["job_id"]]
+    if not allowed_ids:
+        history_rows = list_user_history_supabase(user_id)
+        allowed_ids = [row.get("job_id") for row in history_rows if row.get("job_id") in parsed_ids]
     if not allowed_ids:
         raise HTTPException(404, "No matching jobs found")
 

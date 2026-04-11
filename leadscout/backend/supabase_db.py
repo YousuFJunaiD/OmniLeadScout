@@ -358,6 +358,20 @@ def list_user_leads(
     return rows
 
 
+def list_job_leads(job_id: str, user_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    query = (
+        get_supabase()
+        .table("leads")
+        .select("*")
+        .eq("job_id", job_id)
+        .order("scraped_at", desc=False)
+    )
+    if user_id:
+        query = query.eq("user_id", user_id)
+    resp = query.execute()
+    return _rows(resp)
+
+
 def _month_prefix() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m")
 

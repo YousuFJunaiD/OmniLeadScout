@@ -41,6 +41,40 @@ ROUTE_PROFILE_PATH.parent.mkdir(parents=True, exist_ok=True)
 proxy_pool = None
 
 
+def _speed_profile_for_user(user: Dict[str, Any]) -> Dict[str, Any]:
+    role = str((user or {}).get("role") or "user").strip().lower()
+    plan = str((user or {}).get("plan") or "starter").strip().lower()
+    if role == "admin" or plan in {"growth", "team"}:
+        return {
+            "label": "fastest",
+            "item_delay": 0.2,
+            "retry_delay": 0.5,
+            "batch_delay": 0.2,
+            "website_concurrency": WEBSITE_CONCURRENCY,
+            "batch_size": max(2, V2_BATCH_SIZE),
+            "item_timeout": 120,
+        }
+    if plan == "pro":
+        return {
+            "label": "fast",
+            "item_delay": 1.5,
+            "retry_delay": 1.0,
+            "batch_delay": 1.0,
+            "website_concurrency": max(3, min(WEBSITE_CONCURRENCY, 5)),
+            "batch_size": max(2, min(V2_BATCH_SIZE, 2)),
+            "item_timeout": 120,
+        }
+    return {
+        "label": "starter_throttled",
+        "item_delay": 2.5,
+        "retry_delay": 2.0,
+        "batch_delay": 1.5,
+        "website_concurrency": max(1, min(WEBSITE_CONCURRENCY, 2)),
+        "batch_size": 1,
+        "item_timeout": 90,
+    }
+
+
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -388,6 +422,11 @@ async def process_job(job_row: Dict[str, Any]) -> None:
     total_areas = int(job_row.get("total_areas") or max(1, len(queries) * sum(1 for value in platforms.values() if value)))
     max_per_query = int(job_row.get("max_per_query") or 25)
     website_filter = (job_row.get("website_filter") or "minimal").strip().lower()
+    user = get_user_by_id(user_id) or {}
+    speed_profile = _speed_profile_for_user(user)
+    batch_size = int(speed_profile["batch_size"])
+    website_concurrency = int(speed_profile["website_concurrency"])
+    item_timeout = int(speed_profile["item_timeout"])
 
     state = {
         "status": "running",
@@ -403,7 +442,18 @@ async def process_job(job_row: Dict[str, Any]) -> None:
         "finished_at": None,
     }
     await _save_job_state(job_id, state)
-    logging.info("Maps worker claimed job=%s user=%s city=%s queries=%s platforms=%s", job_id, user_id, city, queries, platforms)
+    logging.info(
+        "Maps worker claimed job=%s user=%s email=%s plan=%s role=%s speed=%s city=%s queries=%s platforms=%s",
+        job_id,
+        user_id,
+        user.get("email"),
+        user.get("plan"),
+        user.get("role"),
+        speed_profile["label"],
+        city,
+        queries,
+        platforms,
+    )
 
     enabled_platforms = []
     if platforms.get("maps"):
@@ -455,6 +505,9 @@ async def process_job(job_row: Dict[str, Any]) -> None:
 
         last_error = None
         used_routes = set()
+        item_timeout_current = item_timeout
+        if speed_profile["label"] == "starter_throttled" and int(state.get("saved_count", 0)) > 0:
+            item_timeout_current = min(item_timeout, 45)
         for attempt in range(1, SCRAPE_ITEM_RETRIES + 1):
             route_context = {"proxy": None, "selection": "direct_only", "proxy_info": None, "route_key": "direct", "route_type": "direct"}
             try:
@@ -495,7 +548,7 @@ async def process_job(job_row: Dict[str, Any]) -> None:
                 if platform_name == "Maps":
                     results = await asyncio.wait_for(
                         _run_maps_subprocess(query, city, max_per_query, resume_state, _progress_callback, proxy_dict=route_context["proxy"]),
-                        timeout=240,
+                        timeout=item_timeout_current,
                     )
                     _report_proxy_outcome(route_context.get("proxy"), None, success=True)
                     _record_route_outcome(route_context["route_key"], route_context["route_type"], success=True)
@@ -535,9 +588,9 @@ async def process_job(job_row: Dict[str, Any]) -> None:
                 if attempt >= SCRAPE_ITEM_RETRIES:
                     raise
                 if blocker_type == "transport_proxy_failure":
-                    await asyncio.sleep(0.5)
+                    await asyncio.sleep(max(0.25, float(speed_profile["retry_delay"]) / 2))
                     continue
-                await asyncio.sleep(min(2.5, attempt))
+                await asyncio.sleep(float(speed_profile["retry_delay"]) * attempt)
         raise RuntimeError(str(last_error or "Unknown worker error"))
 
     try:
@@ -550,12 +603,12 @@ async def process_job(job_row: Dict[str, Any]) -> None:
                     continue
                 work_items.append((platform_name, query))
 
-        for batch_start in range(0, len(work_items), V2_BATCH_SIZE):
+        for batch_start in range(0, len(work_items), batch_size):
             if _job_cancel_requested(job_id):
                 state["status"] = "stopped"
                 break
 
-            batch = work_items[batch_start: batch_start + V2_BATCH_SIZE]
+            batch = work_items[batch_start: batch_start + batch_size]
             for platform_name, query in batch:
                 label = f"{query} in {city}  [{platform_name}]"
                 _event(state, "info", "Searching sources...")
@@ -575,6 +628,10 @@ async def process_job(job_row: Dict[str, Any]) -> None:
                 )
                 state["current_query"] = f"{query} in {city}  [{platform_name}]"
                 state["progress_marker"]["current_item"] = item_key
+                if state["processed_areas"] > 0:
+                    state["progress_message"] = "Fetching results..."
+                    await _save_job_state(job_id, state)
+                    await asyncio.sleep(float(speed_profile["item_delay"]))
                 await _save_job_state(job_id, state)
                 try:
                     results = await _run_item(platform_name, query, item_state.get("resume_state") or {})
@@ -613,7 +670,7 @@ async def process_job(job_row: Dict[str, Any]) -> None:
             await async_enrich_websites(
                 batch_leads,
                 timeout=10,
-                concurrency=WEBSITE_CONCURRENCY,
+                concurrency=website_concurrency,
                 retries=3,
             )
 
@@ -638,6 +695,8 @@ async def process_job(job_row: Dict[str, Any]) -> None:
                 save_leads(job_id, user_id, payloads)
                 state["saved_count"] = int(state.get("saved_count", 0)) + len(payloads)
                 await _save_job_state(job_id, state)
+            if batch_start + batch_size < len(work_items):
+                await asyncio.sleep(float(speed_profile["batch_delay"]))
 
         final_status = _final_status(state["status"] == "stopped", total_found, state["saved_count"], source_failures)
         state["status"] = final_status
@@ -656,7 +715,6 @@ async def process_job(job_row: Dict[str, Any]) -> None:
             },
         )
         await _save_job_state(job_id, state, cancel_requested=False)
-        user = get_user_by_id(user_id) or {}
         logging.info(
             "Maps worker finished job=%s user=%s email=%s status=%s raw_found=%s saved=%s failure_reason=%s",
             job_id,
