@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import random
 import sys
 import traceback
 from dataclasses import asdict
@@ -9,6 +10,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List
 
+import config as app_config
+from proxy_manager import ProxyPool
 from scraper_indiamart import scrape as indiamart_scrape
 from scraper_justdial import scrape as justdial_scrape
 from supabase_db import (
@@ -30,6 +33,10 @@ MAX_RECENT_EVENTS = 20
 SCRAPE_ITEM_RETRIES = max(1, int(os.getenv("LEADSCOUT_MAPS_ITEM_RETRIES", "3")))
 WEBSITE_CONCURRENCY = max(1, int(os.getenv("LEADSCOUT_V2_WEBSITE_CONCURRENCY", "8")))
 V2_BATCH_SIZE = max(1, int(os.getenv("LEADSCOUT_V2_BATCH_SIZE", "3")))
+ALLOW_DIRECT_FALLBACK = os.getenv("LEADSCOUT_ALLOW_DIRECT_MAPS_FALLBACK", "0").strip().lower() in {"1", "true", "yes"}
+PROXY_ROTATION_ENABLED = bool(getattr(app_config, "USE_PROXY_POOL", True))
+
+proxy_pool = None
 
 
 def _utc_now() -> str:
@@ -149,7 +156,64 @@ def _lead_to_payload(lead: Lead) -> Dict[str, Any]:
     }
 
 
-async def _run_maps_subprocess(query: str, city: str, max_per_query: int, resume_state: Dict[str, Any], progress_callback):
+def _ensure_proxy_pool():
+    global proxy_pool
+    if proxy_pool is not None:
+        return proxy_pool
+    if not PROXY_ROTATION_ENABLED:
+        return None
+    try:
+        pool = ProxyPool(
+            protocols=getattr(app_config, "PROXY_PROTOCOLS", None),
+            test_timeout=getattr(app_config, "PROXY_TEST_TIMEOUT", 8),
+            test_workers=getattr(app_config, "PROXY_TEST_WORKERS", 120),
+            max_failures=getattr(app_config, "PROXY_MAX_FAILURES", 3),
+            quarantine_seconds=max(120, int(os.getenv("LEADSCOUT_PROXY_QUARANTINE_SECONDS", "600"))),
+            extra_proxies=getattr(app_config, "EXTRA_PROXIES", None),
+            verbose=False,
+        )
+        pool.load()
+        proxy_pool = pool
+        logging.info("Maps worker proxy pool ready stats=%s", pool.stats())
+    except Exception as exc:
+        logging.warning("Maps worker proxy pool unavailable error=%s", exc)
+        proxy_pool = None
+    return proxy_pool
+
+
+def _pick_proxy(previous_urls: set[str]) -> Dict[str, Any]:
+    pool = _ensure_proxy_pool()
+    if not pool:
+        return {"proxy": None, "rotated": False, "selection": "direct_only" if ALLOW_DIRECT_FALLBACK else "no_proxy_available"}
+    chosen = None
+    for _ in range(max(1, len(pool))):
+        candidate = pool.get()
+        if not candidate:
+            break
+        if (candidate.get("http") or "") not in previous_urls:
+            chosen = candidate
+            break
+    if not chosen:
+        chosen = pool.get()
+    return {
+        "proxy": chosen,
+        "rotated": bool(chosen),
+        "selection": "healthy_proxy" if chosen else ("direct_only" if ALLOW_DIRECT_FALLBACK else "pool_exhausted"),
+        "proxy_info": pool.info(chosen) if chosen else None,
+    }
+
+
+def _report_proxy_outcome(proxy: Dict[str, str] | None, blocker_type: str | None, success: bool) -> None:
+    pool = _ensure_proxy_pool()
+    if not pool or not proxy:
+        return
+    if success:
+        pool.report_success(proxy)
+    else:
+        pool.report_failure(proxy, blocker_type or "source_error")
+
+
+async def _run_maps_subprocess(query: str, city: str, max_per_query: int, resume_state: Dict[str, Any], progress_callback, proxy_dict=None):
     worker_script = str(Path(__file__).parent / "scraper_maps.py")
     cmd = [
         sys.executable,
@@ -163,6 +227,8 @@ async def _run_maps_subprocess(query: str, city: str, max_per_query: int, resume
         "--resume-state",
         json.dumps(resume_state or {}),
     ]
+    if proxy_dict:
+        cmd.extend(["--proxy-json", json.dumps(proxy_dict)])
     logging.info("Maps subprocess start worker=%s query=%s city=%s", WORKER_ID, query, city)
     proc = await asyncio.create_subprocess_exec(
         *cmd,
@@ -285,19 +351,55 @@ async def process_job(job_row: Dict[str, Any]) -> None:
 
             phase = progress_state.get("phase") if isinstance(progress_state, dict) else None
             phase_message = {
-                "build_search": "Searching sources...",
-                "page_opened": "Searching sources...",
-                "search_loaded": "Searching sources...",
+                "launching_browser": "Launching browser...",
+                "build_search": "Launching browser...",
+                "page_opened": "Launching browser...",
+                "navigating_maps": "Navigating Maps...",
+                "search_loaded": "Navigating Maps...",
+                "waiting_for_results": "Waiting for results...",
                 "search_results": "Searching sources...",
                 "listing_page": "Searching sources...",
                 "fetch_page": "Searching sources...",
+                "consent_detected": "Consent detected...",
+                "captcha_detected": "Captcha detected...",
+                "rotating_proxy": "Rotating proxy...",
+                "source_blocked": "Source blocked...",
+                "selector_failure": "Results UI not ready...",
             }.get(phase, "Searching sources...")
             state["progress_message"] = phase_message
             state["progress_marker"] = progress_marker
+            if phase in {"consent_detected", "captcha_detected", "rotating_proxy", "source_blocked", "selector_failure"}:
+                _event(state, "info", phase_message)
+            debug_artifacts = progress_state.get("debug_artifacts") if isinstance(progress_state, dict) else None
+            if debug_artifacts:
+                _event(state, "info", f"Debug artifacts saved: {debug_artifacts}")
 
         last_error = None
+        used_proxy_urls = set()
         for attempt in range(1, SCRAPE_ITEM_RETRIES + 1):
+            proxy_context = {"proxy": None, "rotated": False, "selection": "direct_only", "proxy_info": None}
             try:
+                if platform_name == "Maps":
+                    proxy_context = _pick_proxy(used_proxy_urls)
+                    selected_proxy = proxy_context["proxy"]
+                    selected_proxy_url = (selected_proxy or {}).get("http") or ""
+                    if not selected_proxy and not ALLOW_DIRECT_FALLBACK:
+                        raise RuntimeError(f"blocker=source_blocked stage=proxy_selection proxy=direct error=No healthy proxy available and direct fallback is disabled")
+                    if selected_proxy_url:
+                        used_proxy_urls.add(selected_proxy_url)
+                    logging.info(
+                        "Maps worker proxy selection job=%s query=%s attempt=%s/%s proxy=%s rotated=%s selection=%s info=%s",
+                        job_id,
+                        query,
+                        attempt,
+                        SCRAPE_ITEM_RETRIES,
+                        selected_proxy_url or "direct",
+                        proxy_context["rotated"],
+                        proxy_context["selection"],
+                        proxy_context["proxy_info"],
+                    )
+                    if selected_proxy:
+                        _event(state, "info", f"Rotating proxy... using {selected_proxy_url}")
                 logging.info(
                     "Maps worker item start job=%s platform=%s query=%s city=%s attempt=%s/%s resume=%s",
                     job_id,
@@ -309,10 +411,12 @@ async def process_job(job_row: Dict[str, Any]) -> None:
                     resume_state,
                 )
                 if platform_name == "Maps":
-                    return await asyncio.wait_for(
-                        _run_maps_subprocess(query, city, max_per_query, resume_state, _progress_callback),
+                    results = await asyncio.wait_for(
+                        _run_maps_subprocess(query, city, max_per_query, resume_state, _progress_callback, proxy_dict=proxy_context["proxy"]),
                         timeout=240,
                     )
+                    _report_proxy_outcome(proxy_context.get("proxy"), None, success=True)
+                    return results
                 if platform_name == "JustDial":
                     return await asyncio.wait_for(
                         justdial_scrape(query, city, max_per_query, None, resume_state=resume_state, progress_callback=_progress_callback),
@@ -326,18 +430,30 @@ async def process_job(job_row: Dict[str, Any]) -> None:
                 return []
             except Exception as exc:
                 last_error = exc
+                blocker_type = "source_error"
+                exc_text = str(exc)
+                if "blocker=" in exc_text:
+                    match = exc_text.split("blocker=", 1)[1].split()[0]
+                    blocker_type = match.strip()
+                selected_proxy = proxy_context.get("proxy")
+                selected_proxy_url = (selected_proxy or {}).get("http") or "direct"
+                _report_proxy_outcome(selected_proxy, blocker_type, success=False)
                 logging.warning(
-                    "Maps worker item retry job=%s platform=%s query=%s attempt=%s/%s error=%s",
+                    "Maps worker item retry job=%s platform=%s query=%s attempt=%s/%s proxy=%s blocker=%s error=%s",
                     job_id,
                     platform_name,
                     query,
                     attempt,
                     SCRAPE_ITEM_RETRIES,
+                    selected_proxy_url,
+                    blocker_type,
                     exc,
                 )
+                if platform_name == "Maps":
+                    _event(state, "info", f"Rotating proxy... blocker={blocker_type} proxy={selected_proxy_url}")
                 if attempt >= SCRAPE_ITEM_RETRIES:
                     raise
-                await asyncio.sleep(min(5, attempt * 1.5))
+                await asyncio.sleep(min(2.5, attempt))
         raise RuntimeError(str(last_error or "Unknown worker error"))
 
     try:

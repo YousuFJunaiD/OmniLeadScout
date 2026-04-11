@@ -29,6 +29,12 @@ class _Proxy:
     speed_ms:  float = 9999.0
     failures:  int   = 0
     alive:     bool  = False
+    success_count: int = 0
+    failure_count: int = 0
+    last_failure_reason: str = ""
+    last_success_at: float = 0.0
+    cooldown_until: float = 0.0
+    average_latency_ms: float = 9999.0
 
     @property
     def url(self) -> str:
@@ -40,7 +46,8 @@ class _Proxy:
 
     @property
     def score(self) -> float:
-        return self.speed_ms + self.failures * 1500
+        cooldown_penalty = 5000 if self.cooldown_until > time.time() else 0
+        return min(self.speed_ms, self.average_latency_ms) + self.failures * 1500 + self.failure_count * 250 + cooldown_penalty
 
 
 class ProxyPool:
@@ -62,6 +69,7 @@ class ProxyPool:
         test_workers=120,
         max_failures=3,
         max_speed_ms=6000,
+        quarantine_seconds=300,
         extra_proxies=None,
         verbose=True,
     ):
@@ -70,6 +78,7 @@ class ProxyPool:
         self.test_workers = test_workers
         self.max_failures = max_failures
         self.max_speed_ms = max_speed_ms
+        self.quarantine_seconds = quarantine_seconds
         self.extra_proxies = extra_proxies or []
         self.verbose      = verbose
 
@@ -101,13 +110,19 @@ class ProxyPool:
         with self._lock:
             if not self._live:
                 return None
-            self._idx = self._idx % len(self._live)
-            p = self._live[self._idx]
+            now = time.time()
+            healthy = [p for p in self._live if p.cooldown_until <= now]
+            pool = healthy or self._live
+            self._idx = self._idx % len(pool)
+            p = pool[self._idx]
             self._idx += 1
             return p.as_dict
 
     def bad(self, proxy: Optional[Dict]):
         """Report a proxy as failed."""
+        self.report_failure(proxy, "unknown_failure")
+
+    def report_failure(self, proxy: Optional[Dict], reason: str):
         if not proxy:
             return
         url = proxy.get("http", "")
@@ -115,12 +130,18 @@ class ProxyPool:
             p = self._all.get(url)
             if p:
                 p.failures += 1
+                p.failure_count += 1
+                p.last_failure_reason = str(reason or "unknown_failure")
+                p.cooldown_until = time.time() + min(self.quarantine_seconds * max(1, p.failures), self.quarantine_seconds * 6)
                 if p.failures >= self.max_failures:
                     p.alive = False
-                    self._sort()
+                self._sort()
 
     def ok(self, proxy: Optional[Dict]):
         """Report a proxy as working."""
+        self.report_success(proxy)
+
+    def report_success(self, proxy: Optional[Dict], latency_ms: Optional[float] = None):
         if not proxy:
             return
         url = proxy.get("http", "")
@@ -128,6 +149,39 @@ class ProxyPool:
             p = self._all.get(url)
             if p:
                 p.failures = max(0, p.failures - 1)
+                p.success_count += 1
+                p.last_success_at = time.time()
+                p.cooldown_until = 0.0
+                p.alive = True
+                if latency_ms is not None:
+                    latency_ms = float(latency_ms)
+                    if p.average_latency_ms >= 9999:
+                        p.average_latency_ms = latency_ms
+                    else:
+                        p.average_latency_ms = (p.average_latency_ms * 0.7) + (latency_ms * 0.3)
+                    p.speed_ms = min(p.speed_ms, latency_ms)
+                self._sort()
+
+    def info(self, proxy: Optional[Dict]) -> Optional[Dict[str, object]]:
+        if not proxy:
+            return None
+        url = proxy.get("http", "")
+        with self._lock:
+            p = self._all.get(url)
+            if not p:
+                return None
+            return {
+                "url": p.url,
+                "protocol": p.protocol,
+                "failures": p.failures,
+                "success_count": p.success_count,
+                "failure_count": p.failure_count,
+                "last_failure_reason": p.last_failure_reason,
+                "last_success_at": p.last_success_at,
+                "cooldown_until": p.cooldown_until,
+                "average_latency_ms": round(p.average_latency_ms if p.average_latency_ms < 9999 else p.speed_ms, 2),
+                "alive": p.alive,
+            }
 
     def stats(self) -> Dict:
         with self._lock:
@@ -138,6 +192,8 @@ class ProxyPool:
             return {
                 "total":    len(self._all),
                 "live":     len(self._live),
+                "healthy":  sum(1 for p in self._live if p.cooldown_until <= time.time()),
+                "quarantined": sum(1 for p in self._all.values() if p.cooldown_until > time.time()),
                 "fastest_ms": round(speeds[0]) if speeds else 0,
                 "median_ms":  round(speeds[len(speeds)//2]) if speeds else 0,
                 "by_protocol": by_proto,
