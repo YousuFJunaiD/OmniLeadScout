@@ -2,7 +2,6 @@ import asyncio
 import json
 import logging
 import os
-import random
 import sys
 import traceback
 from dataclasses import asdict
@@ -33,8 +32,11 @@ MAX_RECENT_EVENTS = 20
 SCRAPE_ITEM_RETRIES = max(1, int(os.getenv("LEADSCOUT_MAPS_ITEM_RETRIES", "3")))
 WEBSITE_CONCURRENCY = max(1, int(os.getenv("LEADSCOUT_V2_WEBSITE_CONCURRENCY", "8")))
 V2_BATCH_SIZE = max(1, int(os.getenv("LEADSCOUT_V2_BATCH_SIZE", "3")))
-ALLOW_DIRECT_FALLBACK = os.getenv("LEADSCOUT_ALLOW_DIRECT_MAPS_FALLBACK", "0").strip().lower() in {"1", "true", "yes"}
+ALLOW_DIRECT_FALLBACK = os.getenv("LEADSCOUT_ALLOW_DIRECT_MAPS_FALLBACK", "1").strip().lower() in {"1", "true", "yes"}
+PREFER_DIRECT_ROUTE = os.getenv("LEADSCOUT_PREFER_DIRECT_MAPS_ROUTE", "1").strip().lower() in {"1", "true", "yes"}
 PROXY_ROTATION_ENABLED = bool(getattr(app_config, "USE_PROXY_POOL", True))
+ROUTE_PROFILE_PATH = Path(os.getenv("LEADSCOUT_ROUTE_PROFILE_PATH", str(Path(__file__).parent / "output" / "maps_route_profiles.json")))
+ROUTE_PROFILE_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 proxy_pool = None
 
@@ -156,6 +158,46 @@ def _lead_to_payload(lead: Lead) -> Dict[str, Any]:
     }
 
 
+def _load_route_profiles() -> Dict[str, Any]:
+    try:
+        if ROUTE_PROFILE_PATH.exists():
+            return json.loads(ROUTE_PROFILE_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return {"routes": {}}
+
+
+def _save_route_profiles(data: Dict[str, Any]) -> None:
+    ROUTE_PROFILE_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _record_route_outcome(route_key: str, route_type: str, success: bool, blocker_type: str | None = None) -> None:
+    payload = _load_route_profiles()
+    routes = payload.setdefault("routes", {})
+    entry = routes.setdefault(route_key, {
+        "route_type": route_type,
+        "success_count": 0,
+        "failure_count": 0,
+        "last_failure_reason": "",
+        "last_success_at": None,
+        "last_attempt_at": None,
+    })
+    entry["last_attempt_at"] = _utc_now()
+    if success:
+        entry["success_count"] = int(entry.get("success_count", 0)) + 1
+        entry["last_success_at"] = _utc_now()
+    else:
+        entry["failure_count"] = int(entry.get("failure_count", 0)) + 1
+        entry["last_failure_reason"] = blocker_type or "unknown_failure"
+    _save_route_profiles(payload)
+
+
+def _preferred_route_score(route_key: str) -> int:
+    routes = _load_route_profiles().get("routes", {})
+    entry = routes.get(route_key) or {}
+    return int(entry.get("success_count", 0)) - int(entry.get("failure_count", 0))
+
+
 def _ensure_proxy_pool():
     global proxy_pool
     if proxy_pool is not None:
@@ -203,6 +245,29 @@ def _pick_proxy(previous_urls: set[str]) -> Dict[str, Any]:
     }
 
 
+def _pick_maps_route(previous_routes: set[str]) -> Dict[str, Any]:
+    direct_score = _preferred_route_score("direct")
+    if ALLOW_DIRECT_FALLBACK and "direct" not in previous_routes and (PREFER_DIRECT_ROUTE or direct_score >= 0):
+        return {
+            "route_key": "direct",
+            "route_type": "direct",
+            "proxy": None,
+            "selection": "preferred_direct",
+            "route_score": direct_score,
+        }
+    proxy_choice = _pick_proxy({route for route in previous_routes if route != "direct"})
+    proxy = proxy_choice.get("proxy")
+    route_key = (proxy or {}).get("http") or "direct"
+    return {
+        "route_key": route_key,
+        "route_type": "proxy" if proxy else "direct",
+        "proxy": proxy,
+        "selection": proxy_choice.get("selection"),
+        "proxy_info": proxy_choice.get("proxy_info"),
+        "route_score": _preferred_route_score(route_key),
+    }
+
+
 def _report_proxy_outcome(proxy: Dict[str, str] | None, blocker_type: str | None, success: bool) -> None:
     pool = _ensure_proxy_pool()
     if not pool or not proxy:
@@ -211,6 +276,20 @@ def _report_proxy_outcome(proxy: Dict[str, str] | None, blocker_type: str | None
         pool.report_success(proxy)
     else:
         pool.report_failure(proxy, blocker_type or "source_error")
+
+
+def _classify_worker_error(exc: Exception, stage_hint: str = "") -> str:
+    text = str(exc or "")
+    lowered = text.lower()
+    if "err_tunnel_connection_failed" in lowered or "proxyconnect" in lowered or "tunnel connection failed" in lowered:
+        return "transport_proxy_failure"
+    if "net::err_connection" in lowered or "connection refused" in lowered or "timed out" in lowered and "proxy" in lowered:
+        return "transport_proxy_failure"
+    if "blocker=" in text:
+        return text.split("blocker=", 1)[1].split()[0].strip()
+    if stage_hint == "navigation":
+        return "navigation_failure"
+    return "source_error"
 
 
 async def _run_maps_subprocess(query: str, city: str, max_per_query: int, resume_state: Dict[str, Any], progress_callback, proxy_dict=None):
@@ -375,31 +454,34 @@ async def process_job(job_row: Dict[str, Any]) -> None:
                 _event(state, "info", f"Debug artifacts saved: {debug_artifacts}")
 
         last_error = None
-        used_proxy_urls = set()
+        used_routes = set()
         for attempt in range(1, SCRAPE_ITEM_RETRIES + 1):
-            proxy_context = {"proxy": None, "rotated": False, "selection": "direct_only", "proxy_info": None}
+            route_context = {"proxy": None, "selection": "direct_only", "proxy_info": None, "route_key": "direct", "route_type": "direct"}
             try:
                 if platform_name == "Maps":
-                    proxy_context = _pick_proxy(used_proxy_urls)
-                    selected_proxy = proxy_context["proxy"]
-                    selected_proxy_url = (selected_proxy or {}).get("http") or ""
-                    if not selected_proxy and not ALLOW_DIRECT_FALLBACK:
+                    route_context = _pick_maps_route(used_routes)
+                    selected_proxy = route_context["proxy"]
+                    selected_route_key = route_context["route_key"]
+                    selected_proxy_url = (selected_proxy or {}).get("http") or "direct"
+                    if route_context["route_type"] == "proxy":
+                        used_routes.add(selected_route_key)
+                    else:
+                        used_routes.add("direct")
+                    if not selected_proxy and route_context["route_type"] != "direct":
                         raise RuntimeError(f"blocker=source_blocked stage=proxy_selection proxy=direct error=No healthy proxy available and direct fallback is disabled")
-                    if selected_proxy_url:
-                        used_proxy_urls.add(selected_proxy_url)
                     logging.info(
-                        "Maps worker proxy selection job=%s query=%s attempt=%s/%s proxy=%s rotated=%s selection=%s info=%s",
+                        "Maps worker route selection job=%s query=%s attempt=%s/%s route=%s type=%s selection=%s score=%s info=%s",
                         job_id,
                         query,
                         attempt,
                         SCRAPE_ITEM_RETRIES,
-                        selected_proxy_url or "direct",
-                        proxy_context["rotated"],
-                        proxy_context["selection"],
-                        proxy_context["proxy_info"],
+                        selected_proxy_url,
+                        route_context["route_type"],
+                        route_context["selection"],
+                        route_context.get("route_score"),
+                        route_context.get("proxy_info"),
                     )
-                    if selected_proxy:
-                        _event(state, "info", f"Rotating proxy... using {selected_proxy_url}")
+                    _event(state, "info", f"Using route {selected_proxy_url} ({route_context['route_type']})")
                 logging.info(
                     "Maps worker item start job=%s platform=%s query=%s city=%s attempt=%s/%s resume=%s",
                     job_id,
@@ -412,10 +494,11 @@ async def process_job(job_row: Dict[str, Any]) -> None:
                 )
                 if platform_name == "Maps":
                     results = await asyncio.wait_for(
-                        _run_maps_subprocess(query, city, max_per_query, resume_state, _progress_callback, proxy_dict=proxy_context["proxy"]),
+                        _run_maps_subprocess(query, city, max_per_query, resume_state, _progress_callback, proxy_dict=route_context["proxy"]),
                         timeout=240,
                     )
-                    _report_proxy_outcome(proxy_context.get("proxy"), None, success=True)
+                    _report_proxy_outcome(route_context.get("proxy"), None, success=True)
+                    _record_route_outcome(route_context["route_key"], route_context["route_type"], success=True)
                     return results
                 if platform_name == "JustDial":
                     return await asyncio.wait_for(
@@ -430,29 +513,30 @@ async def process_job(job_row: Dict[str, Any]) -> None:
                 return []
             except Exception as exc:
                 last_error = exc
-                blocker_type = "source_error"
-                exc_text = str(exc)
-                if "blocker=" in exc_text:
-                    match = exc_text.split("blocker=", 1)[1].split()[0]
-                    blocker_type = match.strip()
-                selected_proxy = proxy_context.get("proxy")
+                blocker_type = _classify_worker_error(exc, "navigation" if "goto" in str(exc).lower() else "")
+                selected_proxy = route_context.get("proxy")
                 selected_proxy_url = (selected_proxy or {}).get("http") or "direct"
                 _report_proxy_outcome(selected_proxy, blocker_type, success=False)
+                _record_route_outcome(route_context["route_key"], route_context["route_type"], success=False, blocker_type=blocker_type)
                 logging.warning(
-                    "Maps worker item retry job=%s platform=%s query=%s attempt=%s/%s proxy=%s blocker=%s error=%s",
+                    "Maps worker item retry job=%s platform=%s query=%s attempt=%s/%s route=%s type=%s blocker=%s error=%s",
                     job_id,
                     platform_name,
                     query,
                     attempt,
                     SCRAPE_ITEM_RETRIES,
                     selected_proxy_url,
+                    route_context["route_type"],
                     blocker_type,
                     exc,
                 )
                 if platform_name == "Maps":
-                    _event(state, "info", f"Rotating proxy... blocker={blocker_type} proxy={selected_proxy_url}")
+                    _event(state, "info", f"Rotating proxy... blocker={blocker_type} route={selected_proxy_url}")
                 if attempt >= SCRAPE_ITEM_RETRIES:
                     raise
+                if blocker_type == "transport_proxy_failure":
+                    await asyncio.sleep(0.5)
+                    continue
                 await asyncio.sleep(min(2.5, attempt))
         raise RuntimeError(str(last_error or "Unknown worker error"))
 

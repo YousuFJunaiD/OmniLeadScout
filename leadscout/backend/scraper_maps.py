@@ -27,6 +27,8 @@ MAPS_SCROLL_LIMIT = 20
 MAPS_VIEWPORT = {"width": 1366, "height": 768}
 MAPS_DEBUG_DIR = Path(os.getenv("LEADSCOUT_MAPS_DEBUG_DIR", str(Path(__file__).parent / "output" / "maps_debug")))
 MAPS_DEBUG_DIR.mkdir(parents=True, exist_ok=True)
+MAPS_TIMEZONE = os.getenv("LEADSCOUT_MAPS_TIMEZONE", "Asia/Kolkata")
+MAPS_LOCALE = os.getenv("LEADSCOUT_MAPS_LOCALE", "en-IN")
 MAPS_LAUNCH_ARGS = [
     "--headless=new",
     "--no-sandbox",
@@ -162,6 +164,7 @@ async def _dom_markers(page) -> dict:
         "title": await page.title(),
         "has_feed": await page.locator('div[role="feed"]').count() > 0,
         "has_result_links": await page.locator('a[href*="/maps/place/"]').count() > 0,
+        "result_link_count": await page.locator('a[href*="/maps/place/"]').count(),
         "has_main": await page.locator('div[role="main"]').count() > 0,
         "consent_detected": any(token in lowered for token in BLOCKER_TEXT_PATTERNS["consent_block"]),
         "captcha_detected": any(token in lowered for token in BLOCKER_TEXT_PATTERNS["captcha_block"]),
@@ -289,8 +292,13 @@ async def scrape(
                 ctx = await browser.new_context(
                     user_agent=rua(),
                     viewport=MAPS_VIEWPORT,
-                    locale="en-IN",
+                    locale=MAPS_LOCALE,
+                    timezone_id=MAPS_TIMEZONE,
                     ignore_https_errors=True,
+                    extra_http_headers={
+                        "Accept-Language": "en-IN,en;q=0.9",
+                        "Upgrade-Insecure-Requests": "1",
+                    },
                 )
                 await ctx.add_init_script("Object.defineProperty(navigator,'webdriver',{get:()=>undefined})")
 
@@ -313,12 +321,13 @@ async def scrape(
                 await asyncio.sleep(2.2)
                 markers = await _dom_markers(page)
                 log.info(
-                    "  [Maps] loaded attempt=%s url=%s title=%s feed=%s links=%s consent=%s captcha=%s signin=%s",
+                    "  [Maps] loaded attempt=%s url=%s title=%s feed=%s links=%s link_count=%s consent=%s captcha=%s signin=%s",
                     attempt,
                     markers.get("url"),
                     markers.get("title"),
                     markers.get("has_feed"),
                     markers.get("has_result_links"),
+                    markers.get("result_link_count"),
                     markers.get("consent_detected"),
                     markers.get("captcha_detected"),
                     markers.get("signin_detected"),
@@ -354,7 +363,7 @@ async def scrape(
                     })
                     await _raise_blocker(page, query, city, "captcha_check", "captcha_block", "CAPTCHA or unusual traffic block detected", markers)
 
-                if markers.get("signin_detected"):
+                if markers.get("signin_detected") and not (markers.get("has_result_links") or markers.get("has_feed")):
                     await _raise_blocker(page, query, city, "signin_check", "selector_mismatch", "Google sign-in prompt blocked the results layout", markers)
 
                 last_stage = "results_ready"
