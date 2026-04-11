@@ -101,8 +101,8 @@ ALLOWED_ORIGINS = sorted(
 app = FastAPI(title="LeadScout API")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -1581,7 +1581,9 @@ async def run_job_v2(job_id: str):
         from scraper_indiamart import scrape as im_scrape
         from utils import (
             Lead, should_keep, deduplicate, async_enrich_websites,
+            fallback_keep_quality,
             make_runtime_lead_key,
+            rank_and_deduplicate_leads,
             save_csv, output_path,
         )
         from dataclasses import asdict as _asdict
@@ -1704,6 +1706,7 @@ async def run_job_v2(job_id: str):
         progress_items = progress_marker.setdefault("items", {})
 
         all_leads: list = []
+        fallback_pool: list[Lead] = []
         pending_rows: list = []
         accepted_leads = 0
         current_step = sum(1 for item in progress_items.values() if item.get("completed"))
@@ -1950,9 +1953,11 @@ async def run_job_v2(job_id: str):
                 concurrency=V2_WEBSITE_CONCURRENCY,
                 retries=3,
             )
+            fallback_pool.extend(batch_leads)
 
             kept_this_batch = 0
-            for lead in batch_leads:
+            ranked_batch = rank_and_deduplicate_leads(batch_leads, plan, limit=max_per_query)
+            for lead in ranked_batch:
                 if job.get("cancelled"):
                     break
                 if not should_keep(lead, website_filter):
@@ -1999,6 +2004,42 @@ async def run_job_v2(job_id: str):
                 "type": "info",
                 "data": f"{batch_log} | raw_scraped={raw_count}",
             })
+
+        if total_raw_found > 0 and accepted_leads <= 0:
+            fallback_limit = max(1, min(max_per_query, max(10, len(queries))))
+            fallback_batch = rank_and_deduplicate_leads(
+                fallback_pool,
+                plan,
+                limit=fallback_limit,
+                allow_fallback=True,
+                fallback_limit=fallback_limit,
+            )
+            kept_this_batch = 0
+            for lead in fallback_batch:
+                if job.get("cancelled"):
+                    break
+                if not should_keep(lead, website_filter):
+                    continue
+                if not fallback_keep_quality(lead):
+                    continue
+                lead_key = make_runtime_lead_key(lead)
+                if lead_key in seen_runtime_keys:
+                    continue
+                seen_runtime_keys.add(lead_key)
+                all_leads.append(lead)
+                lead_dict = to_lead_dict(lead)
+                pending_rows.append((job_id, user_id, json.dumps(lead_dict)))
+                publish_event(job, {"type": "lead", "data": lead_dict})
+                kept_this_batch += 1
+                if len(pending_rows) >= DB_FLUSH_EVERY:
+                    flush_pending()
+                await asyncio.sleep(0)
+            if kept_this_batch:
+                publish_event(job, {
+                    "type": "info",
+                    "data": f"Primary quality filter saved 0 leads; keeping top {kept_this_batch} usable fallback leads.",
+                })
+                flush_pending()
 
         deduped = deduplicate(all_leads)
         publish_event(job, {"type": "info", "data": f"After dedup: {len(deduped)} unique leads"})

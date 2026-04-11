@@ -24,6 +24,7 @@ from supabase_db import (
 from utils import (
     Lead,
     async_enrich_websites,
+    fallback_keep_quality,
     lead_quality_class,
     lead_quality_score,
     make_runtime_lead_key,
@@ -498,6 +499,7 @@ async def process_job(job_row: Dict[str, Any]) -> None:
             enabled_platforms.append((platform_name, source_key))
 
     all_leads: List[Lead] = []
+    fallback_pool: List[Lead] = []
     total_found = 0
     source_failures: List[str] = []
     seen_runtime_keys = set()
@@ -707,6 +709,7 @@ async def process_job(job_row: Dict[str, Any]) -> None:
                 concurrency=website_concurrency,
                 retries=3,
             )
+            fallback_pool.extend(batch_leads)
 
             _event(state, "info", "Saving leads...")
             await _save_job_state(job_id, state)
@@ -736,7 +739,47 @@ async def process_job(job_row: Dict[str, Any]) -> None:
             if batch_start + batch_size < len(work_items):
                 await asyncio.sleep(float(speed_profile["batch_delay"]))
 
-        all_leads = rank_and_deduplicate_leads(all_leads, user_plan, user_role)
+        if total_found > 0 and int(state.get("saved_count", 0)) <= 0:
+            fallback_limit = max(1, min(effective_max_per_query, max(10, len(queries))))
+            fallback_batch = rank_and_deduplicate_leads(
+                fallback_pool,
+                user_plan,
+                user_role,
+                limit=fallback_limit,
+                allow_fallback=True,
+                fallback_limit=fallback_limit,
+            )
+            fallback_payloads = []
+            for lead in fallback_batch:
+                if _job_cancel_requested(job_id):
+                    state["status"] = "stopped"
+                    break
+                if not should_keep(lead, website_filter):
+                    continue
+                if not fallback_keep_quality(lead):
+                    continue
+                lead_key = make_runtime_lead_key(lead)
+                if lead_key in seen_runtime_keys:
+                    continue
+                seen_runtime_keys.add(lead_key)
+                payload = _lead_to_payload(lead)
+                fallback_payloads.append(payload)
+                all_leads.append(lead)
+                quality_score = lead_quality_score(lead)
+                quality_class = lead_quality_class(quality_score)
+                _event(
+                    state,
+                    "info",
+                    f"Fallback-kept {quality_class} lead from {lead.source} score={quality_score} phone={bool(lead.phone)} email={bool(lead.email)} website={bool(lead.website)}",
+                )
+                _event(state, "lead", payload)
+            if fallback_payloads:
+                _event(state, "info", f"Primary quality filter saved 0 leads; keeping top {len(fallback_payloads)} usable fallback leads.")
+                save_leads(job_id, user_id, fallback_payloads)
+                state["saved_count"] = int(state.get("saved_count", 0)) + len(fallback_payloads)
+                await _save_job_state(job_id, state)
+
+        all_leads = rank_and_deduplicate_leads(all_leads, user_plan, user_role, allow_fallback=True)
         final_status = _final_status(state["status"] == "stopped", total_found, state["saved_count"], source_failures)
         state["status"] = final_status
         state["progress_message"] = _final_status_message(final_status)

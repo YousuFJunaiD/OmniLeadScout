@@ -109,6 +109,28 @@ def has_strong_business_metadata(lead: Lead) -> bool:
     )
 
 
+def has_meaningful_contact_value(lead: Lead) -> bool:
+    return bool(
+        clean_phone(lead.phone)
+        or clean(lead.email)
+        or clean(lead.website)
+        or has_strong_business_metadata(lead)
+    )
+
+
+def is_usable_lead(lead: Lead) -> bool:
+    phone = bool(clean_phone(lead.phone))
+    email = bool(clean(lead.email))
+    website = bool(clean(lead.website))
+    strong_meta = has_strong_business_metadata(lead)
+
+    if phone or email or website:
+        return True
+    if strong_meta and not looks_weak_listing(lead):
+        return True
+    return False
+
+
 def looks_weak_listing(lead: Lead) -> bool:
     name = clean(lead.name).lower()
     weak_name_patterns = [
@@ -129,6 +151,7 @@ def looks_weak_listing(lead: Lead) -> bool:
 def lead_quality_score(lead: Lead) -> int:
     score = 0
     phone = bool(clean_phone(lead.phone))
+    email = bool(clean(lead.email))
     website = bool(clean(lead.website))
     category = bool(clean(lead.category))
     location_meta = bool(clean(lead.address) or clean(lead.city))
@@ -136,11 +159,15 @@ def lead_quality_score(lead: Lead) -> int:
 
     if phone:
         score += 5
+    if email:
+        score += 4
     if website:
         score += 4
     if category:
         score += 2
     if location_meta:
+        score += 2
+    if strong_meta:
         score += 2
     if lead.source == "justdial":
         score += 2
@@ -148,11 +175,15 @@ def lead_quality_score(lead: Lead) -> int:
         score += 2
     if lead.source == "google_maps" and strong_meta:
         score += 1
-    if not phone and not website:
-        score -= 4
-    if looks_weak_listing(lead):
+    if email and website:
+        score += 2
+    if website and strong_meta:
+        score += 1
+    if not phone and not email and not website:
         score -= 3
-    if not strong_meta:
+    if looks_weak_listing(lead) and not (phone or email or website):
+        score -= 3
+    if not strong_meta and not (phone or email or website):
         score -= 2
     return score
 
@@ -169,19 +200,32 @@ def should_keep_quality(lead: Lead, plan: str, role: str = "user") -> bool:
     normalized_role = clean(role).lower() or "user"
     normalized_plan = clean(plan).lower() or "starter"
     if normalized_role == "admin" or normalized_plan in {"growth", "team"}:
-        if clean_phone(lead.phone) or clean(lead.website):
+        if is_usable_lead(lead):
             return True
-        return lead_quality_score(lead) >= 6 and not looks_weak_listing(lead)
+        return lead_quality_score(lead) >= 4 and not looks_weak_listing(lead)
     if normalized_plan == "pro":
-        return lead_quality_score(lead) >= 1 and not (looks_weak_listing(lead) and not clean_phone(lead.phone) and not clean(lead.website))
+        if is_usable_lead(lead):
+            return True
+        return lead_quality_score(lead) >= 2 and not looks_weak_listing(lead)
     return True
 
 
-def lead_sort_key(lead: Lead) -> Tuple[int, int, int, int, int]:
+def fallback_keep_quality(lead: Lead) -> bool:
+    if not is_usable_lead(lead):
+        return False
+    if looks_weak_listing(lead) and not (
+        clean_phone(lead.phone) or clean(lead.email) or clean(lead.website)
+    ):
+        return False
+    return True
+
+
+def lead_sort_key(lead: Lead) -> Tuple[int, int, int, int, int, int]:
     score = lead_quality_score(lead)
     return (
         score,
         1 if clean_phone(lead.phone) else 0,
+        1 if clean(lead.email) else 0,
         1 if clean(lead.website) else 0,
         1 if has_strong_business_metadata(lead) else 0,
         1 if lead.source in {"justdial", "indiamart"} else 0,
@@ -203,7 +247,14 @@ def choose_richer_lead(existing: Lead, incoming: Lead) -> Lead:
     return richer
 
 
-def rank_and_deduplicate_leads(leads: List[Lead], plan: str, role: str = "user", limit: Optional[int] = None) -> List[Lead]:
+def rank_and_deduplicate_leads(
+    leads: List[Lead],
+    plan: str,
+    role: str = "user",
+    limit: Optional[int] = None,
+    allow_fallback: bool = False,
+    fallback_limit: Optional[int] = None,
+) -> List[Lead]:
     merged = {}
     for lead in leads:
         k = _key(lead.name)
@@ -215,6 +266,12 @@ def rank_and_deduplicate_leads(leads: List[Lead], plan: str, role: str = "user",
             merged[k] = choose_richer_lead(merged[k], lead)
     ranked = sorted(merged.values(), key=lead_sort_key, reverse=True)
     filtered = [lead for lead in ranked if should_keep_quality(lead, plan, role)]
+    if not filtered and allow_fallback:
+        fallback_ranked = [lead for lead in ranked if fallback_keep_quality(lead)]
+        cap = fallback_limit if fallback_limit is not None else limit
+        if cap is not None:
+            return fallback_ranked[: max(0, int(cap))]
+        return fallback_ranked
     if limit is not None:
         return filtered[: max(0, int(limit))]
     return filtered
@@ -493,7 +550,13 @@ def should_keep(lead: Lead, mode: str) -> bool:
     if mode == "no_website":
         return lead.website_status in ("no_website", "social_only")
     # "minimal" (default)
-    return lead.website_status in ("no_website", "social_only", "minimal", "unreachable")
+    if lead.website_status in ("no_website", "social_only", "minimal", "unreachable"):
+        return True
+    if clean(lead.email) and clean(lead.website):
+        return True
+    if clean(lead.website) and has_strong_business_metadata(lead):
+        return True
+    return False
 
 # ── Deduplication ─────────────────────────────────────────────────────────────
 

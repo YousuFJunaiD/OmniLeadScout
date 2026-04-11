@@ -526,6 +526,34 @@ export default function DashboardPage({ user, onLogout }) {
     return fallback
   }
 
+  const toFeedText = (value, fallback = "") => {
+    if (value == null) return fallback
+    if (typeof value === "string") {
+      const text = value.trim()
+      return text || fallback
+    }
+    if (typeof value === "number" || typeof value === "boolean") {
+      return String(value)
+    }
+    if (Array.isArray(value)) {
+      const text = value.map((item) => toFeedText(item, "")).filter(Boolean).join(" • ")
+      return text || fallback
+    }
+    if (typeof value === "object") {
+      if (value.message) return toFeedText(value.message, fallback)
+      if (value.error) return toFeedText(value.error, fallback)
+      if (value.detail) return toFeedText(value.detail, fallback)
+      const pairs = Object.entries(value)
+        .map(([key, item]) => {
+          const text = toFeedText(item, "")
+          return text ? `${key}: ${text}` : ""
+        })
+        .filter(Boolean)
+      return pairs.join(" | ") || fallback
+    }
+    return fallback
+  }
+
   const getStatusBadgeClass = (status) => {
     if (status === "completed") return "badge-green"
     if (status === "running") return "badge-cyan"
@@ -553,7 +581,7 @@ export default function DashboardPage({ user, onLogout }) {
   }
 
   const pushFeedMessage = (text, tone = "info") => {
-    const message = String(text || "").trim()
+    const message = toFeedText(text, "").trim()
     if (!message) return
     const key = `${tone}:${message}`
     if (seenMessageKeysRef.current.has(key)) return
@@ -593,7 +621,7 @@ export default function DashboardPage({ user, onLogout }) {
         const data = event.data || {}
         pushFeedMessage(`Blocked, retrying in ${data.wait_seconds || 0}s`, "warn")
       } else {
-        pushFeedMessage(event?.data || type)
+        pushFeedMessage(event?.data ?? type)
       }
     }
   }
@@ -830,8 +858,9 @@ export default function DashboardPage({ user, onLogout }) {
         setProgress(msg.data)
         pushFeedMessage(`Progress ${msg.data?.current || 0}/${msg.data?.total || 0}${msg.data?.query ? ` • ${msg.data.query}` : ""}`)
       } else if (msg.type === "info") {
-        setRuntimeStatus(String(msg.data || ""))
-        pushFeedMessage(String(msg.data || ""))
+        const text = toFeedText(msg.data, "")
+        setRuntimeStatus(text)
+        pushFeedMessage(text)
       } else if (msg.type === "block_wait") {
         const d = msg.data || {}
         const wait = Number(d.wait_seconds || 0)
@@ -859,8 +888,9 @@ export default function DashboardPage({ user, onLogout }) {
         flushLiveFeed()
         keepSocketAliveRef.current = false
         setScraping(false)
-        setRuntimeStatus(String(msg.data || "Stopped with an error"))
-        pushFeedMessage(String(msg.data || "Stopped with an error"), "error")
+        const text = toFeedText(msg.data, "Stopped with an error")
+        setRuntimeStatus(text)
+        pushFeedMessage(text, "error")
         clearActiveJob()
         refreshHistory()
         refreshUsage()
