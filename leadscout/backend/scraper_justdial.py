@@ -2,7 +2,7 @@
 #  scraper_justdial.py  —  JustDial Lead Scraper
 # ============================================================
 import asyncio, json, re, logging
-from typing import List, Optional
+from typing import Callable, List, Optional
 from urllib.parse import urljoin
 from utils import Lead, clean, clean_phone, rua
 
@@ -11,13 +11,21 @@ log = logging.getLogger("LeadScout.JustDial")
 JD_BASE = "https://www.justdial.com"
 
 
-async def scrape(query: str, city: str, max_results: int, proxy_dict=None) -> List[Lead]:
+async def scrape(
+    query: str,
+    city: str,
+    max_results: int,
+    proxy_dict=None,
+    resume_state: Optional[dict] = None,
+    progress_callback: Optional[Callable[[dict], None]] = None,
+) -> List[Lead]:
     try:
         from playwright.async_api import async_playwright
     except ImportError:
         log.error("Run: pip install playwright && playwright install chromium")
         return []
 
+    resume_state = resume_state or {}
     leads = []
     city_slug  = city.replace(" ", "-")
     query_slug = query.replace(" ", "-")
@@ -56,11 +64,20 @@ async def scrape(query: str, city: str, max_results: int, proxy_dict=None) -> Li
                 except Exception:
                     pass
 
-            page_num = 0
-            seen_names = set()
+            page_num = max(0, int(resume_state.get("page", 1) or 1) - 1)
+            seen_names = set(resume_state.get("seen_names", []))
 
             while len(leads) < max_results and page_num < 8:
                 page_num += 1
+                if progress_callback:
+                    progress_callback({
+                        "platform": "JustDial",
+                        "page": page_num,
+                        "phase": "listing_page",
+                        "query": query,
+                        "city": city,
+                        "seen_names": list(seen_names)[-100:],
+                    })
 
                 # ── Strategy 1: extract from __NEXT_DATA__ JSON ──────────────
                 try:

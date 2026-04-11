@@ -2,7 +2,7 @@
 #  scraper_indiamart.py  —  IndiaMart Directory Scraper
 # ============================================================
 import asyncio, json, re, logging, random, os
-from typing import List, Optional
+from typing import Callable, List, Optional
 from urllib.parse import quote_plus
 import httpx
 from bs4 import BeautifulSoup
@@ -40,11 +40,19 @@ async def _fetch_with_retry(client: httpx.AsyncClient, url: str, retries: int = 
     return None
 
 
-async def scrape(query: str, city: str, max_results: int, proxy_dict=None) -> List[Lead]:
+async def scrape(
+    query: str,
+    city: str,
+    max_results: int,
+    proxy_dict=None,
+    resume_state: Optional[dict] = None,
+    progress_callback: Optional[Callable[[dict], None]] = None,
+) -> List[Lead]:
     """Async scraper — no browser needed for IndiaMart."""
     leads  = []
     seen   = set()
-    page   = 1
+    resume_state = resume_state or {}
+    page = max(1, int(resume_state.get("page", 1) or 1))
     consecutive_failures = 0
     log.info(f"  [IM] {query} in {city}")
 
@@ -56,6 +64,14 @@ async def scrape(query: str, city: str, max_results: int, proxy_dict=None) -> Li
         proxy=proxy_url,
     ) as client:
         while len(leads) < max_results:
+            if progress_callback:
+                progress_callback({
+                    "platform": "IndiaMart",
+                    "page": page,
+                    "phase": "fetch_page",
+                    "city": city,
+                    "query": query,
+                })
             url = (
                 f"{IM_SEARCH}?ss={quote_plus(query)}"
                 f"&cq={quote_plus(city)}&biz=&src=ss-dir"

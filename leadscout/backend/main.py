@@ -23,6 +23,7 @@ from typing import Optional
 
 from dotenv import load_dotenv
 from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -39,6 +40,7 @@ from supabase_db import (
     create_scrape_job,
     create_user,
     enforce_plan,
+    get_scrape_job,
     get_user_by_email,
     get_user_by_id,
     list_all_users,
@@ -127,6 +129,27 @@ async def http_exception_handler(request: Request, exc: HTTPException):
             "error": detail,
             "data": None,
             "detail": detail,
+        },
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    sanitized_errors = []
+    for item in exc.errors():
+        sanitized = dict(item)
+        ctx = sanitized.get("ctx")
+        if isinstance(ctx, dict):
+            sanitized["ctx"] = {key: str(value) for key, value in ctx.items()}
+        sanitized_errors.append(sanitized)
+    return JSONResponse(
+        status_code=422,
+        content={
+            "success": False,
+            "message": "Validation failed",
+            "error": sanitized_errors,
+            "data": None,
+            "detail": sanitized_errors,
         },
     )
 
@@ -250,6 +273,7 @@ BLOCK_RECOVERY_MAX_ATTEMPTS = _env_int("LEADSCOUT_BLOCK_RECOVERY_MAX_ATTEMPTS", 
 V2_BATCH_SIZE = _env_int("LEADSCOUT_V2_BATCH_SIZE", 5, 1, 10)
 V2_SCRAPE_CONCURRENCY = _env_int("LEADSCOUT_V2_SCRAPE_CONCURRENCY", 5, 1, 10)
 V2_WEBSITE_CONCURRENCY = _env_int("LEADSCOUT_V2_WEBSITE_CONCURRENCY", 8, 1, 20)
+MAPS_BROWSER_CONCURRENCY = _env_int("LEADSCOUT_MAPS_BROWSER_CONCURRENCY", 1, 1, 3)
 RATE_LIMIT_REQUESTS = _env_int("LEADSCOUT_RATE_LIMIT_REQUESTS", 200, 1, 1000)
 RATE_LIMIT_WINDOW_SECONDS = _env_int("LEADSCOUT_RATE_LIMIT_WINDOW_SECONDS", 60, 10, 3600)
 REQUEST_TIMEOUT_SECONDS = _env_int("LEADSCOUT_REQUEST_TIMEOUT_SECONDS", 8, 5, 10)
@@ -258,6 +282,7 @@ REQUEST_DELAY_MAX_MS = _env_int("LEADSCOUT_REQUEST_DELAY_MAX_MS", 2000, 200, 800
 AUTH_RATE_LIMIT_REQUESTS = _env_int("LEADSCOUT_AUTH_RATE_LIMIT_REQUESTS", 5, 1, 50)
 AUTH_RATE_LIMIT_WINDOW_SECONDS = _env_int("LEADSCOUT_AUTH_RATE_LIMIT_WINDOW_SECONDS", 300, 10, 3600)
 EMAIL_RATE_LIMIT_REQUESTS = _env_int("LEADSCOUT_EMAIL_RATE_LIMIT_REQUESTS", 3, 1, 20)
+maps_browser_semaphore = asyncio.Semaphore(MAPS_BROWSER_CONCURRENCY)
 EMAIL_RATE_LIMIT_WINDOW_SECONDS = _env_int("LEADSCOUT_EMAIL_RATE_LIMIT_WINDOW_SECONDS", 3600, 60, 86400)
 user_request_log: dict[str, collections.deque] = {}
 auth_attempt_log: dict[str, collections.deque] = {}
@@ -690,6 +715,62 @@ def final_status_message(status: str) -> str:
     return "Scrape finished."
 
 
+def _normalize_supabase_queries(value) -> list[str]:
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+            if isinstance(parsed, list):
+                return [str(item).strip() for item in parsed if str(item).strip()]
+        except Exception:
+            cleaned = value.strip()
+            return [cleaned] if cleaned else []
+    return []
+
+
+def _build_supabase_job_status_payload(job_row: dict) -> dict:
+    queries = _normalize_supabase_queries(job_row.get("queries"))
+    recent_events = job_row.get("recent_events") or []
+    if isinstance(recent_events, str):
+        try:
+            recent_events = json.loads(recent_events)
+        except Exception:
+            recent_events = []
+    status = job_row.get("status") or "queued"
+    payload = {
+        "job_id": job_row.get("id"),
+        "status": status,
+        "lead_count": int(job_row.get("leads_found") or 0),
+        "processed_areas": int(job_row.get("processed_areas") or 0),
+        "total_areas": int(job_row.get("total_areas") or (len(queries) if queries else 0)),
+        "current_query": job_row.get("current_query") or "",
+        "progress_message": job_row.get("progress_message") or ("Queued for worker" if status == "queued" else final_status_message(status)),
+        "recent_events": list(recent_events),
+        "running": status in ("queued", "running", "stopping"),
+        "csv_path": job_row.get("csv_path"),
+        "profession": ", ".join(queries),
+        "location": job_row.get("city") or "",
+    }
+    return payload
+
+
+def _normalize_supabase_progress_marker(value) -> dict:
+    if isinstance(value, dict):
+        marker = dict(value)
+    elif isinstance(value, str):
+        try:
+            marker = json.loads(value)
+        except Exception:
+            marker = {}
+    else:
+        marker = {}
+    marker.setdefault("version", 1)
+    marker.setdefault("items", {})
+    marker.setdefault("current_item", None)
+    return marker
+
+
 async def run_job(job_id: str):
     job = active_jobs.get(job_id)
     if not job:
@@ -732,16 +813,19 @@ async def run_job(job_id: str):
                 except Exception:
                     pass
 
-            conn.executemany(
-                "INSERT INTO leads (job_id,user_id,data) VALUES (?,?,?)",
-                pending_rows,
-            )
-            if lead_payloads:
+            unique_payloads = reserve_unique_leads(conn, user_id, job_id, lead_payloads)
+            unique_rows = [(job_id, user_id, json.dumps(lead)) for lead in unique_payloads]
+            if unique_rows:
+                conn.executemany(
+                    "INSERT INTO leads (job_id,user_id,data) VALUES (?,?,?)",
+                    unique_rows,
+                )
+            if unique_payloads:
                 try:
-                    save_leads_supabase(job_id, user_id, lead_payloads)
+                    save_leads_supabase(job_id, user_id, unique_payloads)
                 except Exception as exc:
                     publish_event(job, {"type": "info", "data": f"Supabase lead sync failed: {exc}"})
-            accepted_leads += len(pending_rows)
+            accepted_leads += len(unique_rows)
             conn.execute("UPDATE jobs SET lead_count=? WHERE job_id=?", (accepted_leads, job_id))
             conn.commit()
             pending_rows = []
@@ -1006,6 +1090,78 @@ def get_db():
     return conn
 
 
+def _clean_fingerprint_text(value: object) -> str:
+    text = " ".join(str(value or "").strip().lower().split())
+    return text[:300]
+
+
+def build_lead_fingerprint(user_id: str, lead: dict) -> str:
+    source = _clean_fingerprint_text(lead.get("source") or lead.get("Source"))
+    name = _clean_fingerprint_text(lead.get("Name") or lead.get("name"))
+    phone = _clean_fingerprint_text(lead.get("Phone") or lead.get("phone"))
+    address = _clean_fingerprint_text(lead.get("Address") or lead.get("address"))
+    city = _clean_fingerprint_text(lead.get("City") or lead.get("city"))
+    base = f"{_clean_fingerprint_text(user_id)}|{source}|{name}|{phone}|{address}|{city}"
+    return hashlib.sha1(base.encode("utf-8")).hexdigest()
+
+
+def reserve_unique_leads(conn: sqlite3.Connection, user_id: str, job_id: str, lead_payloads: list[dict]) -> list[dict]:
+    unique_payloads: list[dict] = []
+    for lead in lead_payloads:
+        dedupe_key = build_lead_fingerprint(user_id, lead)
+        inserted = conn.execute(
+            """
+            INSERT OR IGNORE INTO lead_fingerprints
+            (user_id, job_id, dedupe_key, source, name, phone, address, city)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                user_id,
+                job_id,
+                dedupe_key,
+                str(lead.get("source") or lead.get("Source") or ""),
+                str(lead.get("Name") or lead.get("name") or ""),
+                str(lead.get("Phone") or lead.get("phone") or ""),
+                str(lead.get("Address") or lead.get("address") or ""),
+                str(lead.get("City") or lead.get("city") or ""),
+            ),
+        )
+        if inserted.rowcount:
+            payload = dict(lead)
+            payload["dedupe_key"] = dedupe_key
+            unique_payloads.append(payload)
+    return unique_payloads
+
+
+def load_job_progress_marker(row: sqlite3.Row | None) -> dict:
+    if not row:
+        return {"version": 1, "items": {}, "current_item": None}
+    raw = row["progress_marker"] if "progress_marker" in row.keys() else None
+    if not raw:
+        return {"version": 1, "items": {}, "current_item": None}
+    try:
+        data = json.loads(raw)
+        if isinstance(data, dict):
+            data.setdefault("version", 1)
+            data.setdefault("items", {})
+            data.setdefault("current_item", None)
+            return data
+    except Exception:
+        pass
+    return {"version": 1, "items": {}, "current_item": None}
+
+
+def save_job_progress_marker(conn: sqlite3.Connection, job_id: str, marker: dict):
+    conn.execute(
+        "UPDATE jobs SET progress_marker=? WHERE job_id=?",
+        (json.dumps(marker), job_id),
+    )
+
+
+def make_job_item_key(platform_name: str, query: str) -> str:
+    return f"{platform_name}::{query}"
+
+
 def init_db():
     conn = get_db()
     conn.executescript("""
@@ -1039,6 +1195,19 @@ def init_db():
             data TEXT NOT NULL,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         );
+        CREATE TABLE IF NOT EXISTS lead_fingerprints (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            job_id TEXT NOT NULL,
+            dedupe_key TEXT NOT NULL,
+            source TEXT,
+            name TEXT,
+            phone TEXT,
+            address TEXT,
+            city TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(user_id, dedupe_key)
+        );
         CREATE TABLE IF NOT EXISTS payments (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id TEXT NOT NULL,
@@ -1071,8 +1240,13 @@ def init_db():
         conn.execute("ALTER TABLE jobs ADD COLUMN root_job_id TEXT")
     if "resumed_from_job_id" not in cols:
         conn.execute("ALTER TABLE jobs ADD COLUMN resumed_from_job_id TEXT")
+    if "progress_marker" not in cols:
+        conn.execute("ALTER TABLE jobs ADD COLUMN progress_marker TEXT")
     conn.execute("UPDATE jobs SET root_job_id=job_id WHERE root_job_id IS NULL OR root_job_id='' ")
     conn.execute("UPDATE jobs SET completed_area_indexes='[]' WHERE completed_area_indexes IS NULL OR completed_area_indexes='' ")
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_lead_fingerprints_user_key ON lead_fingerprints(user_id, dedupe_key)"
+    )
 
     # If backend restarted, in-memory workers are gone; avoid stale "running" rows.
     conn.execute(
@@ -1325,6 +1499,9 @@ class ScrapeV2Body(BaseModel):
     enable_indiamart: bool = True
     website_filter: str = "minimal"   # no_website | minimal | all
     max_per_query: int = 25
+    root_job_id: Optional[str] = None
+    resumed_from_job_id: Optional[str] = None
+    progress_marker: Optional[dict] = None
 
     @field_validator("niche")
     @classmethod
@@ -1380,6 +1557,67 @@ async def run_job_v2(job_id: str):
         )
         from dataclasses import asdict as _asdict
 
+        maps_worker_path = str(Path(__file__).parent / "scraper_maps.py")
+
+        async def _run_maps_subprocess(query: str, resume_state: dict):
+            cmd = [
+                sys.executable,
+                maps_worker_path,
+                "--query",
+                query,
+                "--city",
+                city,
+                "--max-results",
+                str(max_per_query),
+                "--resume-state",
+                json.dumps(resume_state or {}),
+            ]
+            logging.info("Maps subprocess start job=%s query=%s city=%s cmd=%s", job_id, query, city, cmd[:5] + ["..."])
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=str(Path(__file__).parent),
+            )
+            result_payload = None
+
+            async def _consume_stdout():
+                nonlocal result_payload
+                assert proc.stdout is not None
+                while True:
+                    line = await proc.stdout.readline()
+                    if not line:
+                        break
+                    text = line.decode("utf-8", errors="replace").strip()
+                    if not text:
+                        continue
+                    if text.startswith("__MAPS_PROGRESS__"):
+                        payload = json.loads(text[len("__MAPS_PROGRESS__"):])
+                        _progress_callback(payload)
+                        logging.info("Maps worker progress job=%s query=%s payload=%s", job_id, query, payload)
+                    elif text.startswith("__MAPS_RESULT__"):
+                        result_payload = json.loads(text[len("__MAPS_RESULT__"):])
+                    else:
+                        logging.info("Maps worker stdout job=%s query=%s line=%s", job_id, query, text)
+
+            async def _consume_stderr():
+                assert proc.stderr is not None
+                while True:
+                    line = await proc.stderr.readline()
+                    if not line:
+                        break
+                    text = line.decode("utf-8", errors="replace").strip()
+                    if text:
+                        logging.warning("Maps worker stderr job=%s query=%s line=%s", job_id, query, text)
+
+            await asyncio.gather(_consume_stdout(), _consume_stderr())
+            exit_code = await proc.wait()
+            if exit_code != 0:
+                raise RuntimeError(f"Maps worker exited with code {exit_code}")
+            if not result_payload:
+                raise RuntimeError("Maps worker finished without result payload")
+            return [Lead(**lead) for lead in result_payload.get("leads", [])]
+
         # ── Proxy pool ────────────────────────────────────────
         proxy_pool = None
         try:
@@ -1394,7 +1632,7 @@ async def run_job_v2(job_id: str):
                 verbose=False,
             )
             loop = asyncio.get_event_loop()
-            await loop.run_in_executor(None, proxy_pool.load)
+            await asyncio.wait_for(loop.run_in_executor(None, proxy_pool.load), timeout=5)
             s = proxy_pool.stats()
             logging.info(
                 "Automatic proxy pool ready job=%s live=%s fastest_ms=%s by_protocol=%s",
@@ -1429,11 +1667,17 @@ async def run_job_v2(job_id: str):
             (csv_path, total_steps, job_id),
         )
         conn.commit()
+        row = conn.execute(
+            "SELECT progress_marker, completed_area_indexes FROM jobs WHERE job_id=?",
+            (job_id,),
+        ).fetchone()
+        progress_marker = load_job_progress_marker(row)
+        progress_items = progress_marker.setdefault("items", {})
 
         all_leads: list = []
         pending_rows: list = []
         accepted_leads = 0
-        current_step = 0
+        current_step = sum(1 for item in progress_items.values() if item.get("completed"))
         total_raw_found = 0
         source_failures: list[str] = []
         seen_runtime_keys: set[str] = set()
@@ -1449,16 +1693,19 @@ async def run_job_v2(job_id: str):
                     lead_payloads.append(json.loads(data))
                 except Exception:
                     pass
-            conn.executemany(
-                "INSERT INTO leads (job_id,user_id,data) VALUES (?,?,?)",
-                pending_rows,
-            )
+            unique_payloads = reserve_unique_leads(conn, user_id, job_id, lead_payloads)
+            unique_rows = [(job_id, user_id, json.dumps(lead)) for lead in unique_payloads]
+            if unique_rows:
+                conn.executemany(
+                    "INSERT INTO leads (job_id,user_id,data) VALUES (?,?,?)",
+                    unique_rows,
+                )
             if lead_payloads:
                 try:
-                    save_leads_supabase(job_id, user_id, lead_payloads)
+                    save_leads_supabase(job_id, user_id, unique_payloads)
                 except Exception as exc:
                     publish_event(job, {"type": "info", "data": f"Supabase lead sync failed: {exc}"})
-            accepted_leads += len(pending_rows)
+            accepted_leads += len(unique_rows)
             conn.execute("UPDATE jobs SET lead_count=? WHERE job_id=?", (accepted_leads, job_id))
             conn.commit()
             pending_rows = []
@@ -1482,16 +1729,108 @@ async def run_job_v2(job_id: str):
             async with scrape_semaphore:
                 if job.get("cancelled"):
                     return platform_name, query, [], ""
+                item_key = make_job_item_key(platform_name, query)
+                item_state = progress_items.setdefault(
+                    item_key,
+                    {
+                        "platform": platform_name,
+                        "query": query,
+                        "completed": False,
+                        "resume_state": {},
+                    },
+                )
+                progress_marker["current_item"] = item_key
+                save_job_progress_marker(conn, job_id, progress_marker)
+                conn.commit()
+
+                def _progress_callback(resume_state: dict):
+                    state = progress_items.setdefault(item_key, {})
+                    state.update(
+                        {
+                            "platform": platform_name,
+                            "query": query,
+                            "completed": False,
+                            "resume_state": resume_state or {},
+                        }
+                    )
+                    progress_marker["current_item"] = item_key
+                    save_job_progress_marker(conn, job_id, progress_marker)
+                    conn.commit()
+
+                attempts = 3
                 try:
                     logging.info(
-                        "Scrape V2 item start query=%s location=%s platform=%s",
+                        "Scrape V2 item start query=%s location=%s platform=%s resume_state=%s",
                         query,
                         city,
                         platform_name,
+                        item_state.get("resume_state") or {},
                     )
                     await asyncio.sleep(random.uniform(0.5, 1.2))
-                    results = await scraper_fn(query, city, max_per_query, _get_proxy())
-                    return platform_name, query, results, ""
+                    last_error = ""
+                    for attempt in range(1, attempts + 1):
+                        try:
+                            if platform_name == "Maps":
+                                logging.info(
+                                    "Maps browser slot wait job=%s query=%s location=%s attempt=%s/%s concurrency=%s",
+                                    job_id,
+                                    query,
+                                    city,
+                                    attempt,
+                                    attempts,
+                                    MAPS_BROWSER_CONCURRENCY,
+                                )
+                                async with maps_browser_semaphore:
+                                    logging.info(
+                                        "Maps browser slot acquired job=%s query=%s location=%s attempt=%s/%s",
+                                        job_id,
+                                        query,
+                                        city,
+                                        attempt,
+                                        attempts,
+                                    )
+                                    results = await asyncio.wait_for(
+                                        _run_maps_subprocess(
+                                            query,
+                                            item_state.get("resume_state") or {},
+                                        ),
+                                        timeout=180,
+                                    )
+                            else:
+                                results = await asyncio.wait_for(
+                                    scraper_fn(
+                                        query,
+                                        city,
+                                        max_per_query,
+                                        _get_proxy(),
+                                        resume_state=item_state.get("resume_state") or {},
+                                        progress_callback=_progress_callback,
+                                    ),
+                                    timeout=120,
+                                )
+                            progress_items[item_key] = {
+                                "platform": platform_name,
+                                "query": query,
+                                "completed": True,
+                                "resume_state": item_state.get("resume_state") or {},
+                            }
+                            save_job_progress_marker(conn, job_id, progress_marker)
+                            conn.commit()
+                            return platform_name, query, results, ""
+                        except Exception as exc:
+                            last_error = str(exc)
+                            logging.warning(
+                                "Scrape V2 item retry query=%s location=%s platform=%s attempt=%s/%s error=%s",
+                                query,
+                                city,
+                                platform_name,
+                                attempt,
+                                attempts,
+                                last_error,
+                            )
+                            if attempt >= attempts:
+                                raise
+                            await asyncio.sleep(min(5, attempt * 1.5))
                 except Exception as e:
                     error_text = str(e)
                     source_failures.append(f"{platform_name}:{query}:{error_text}")
@@ -1517,11 +1856,19 @@ async def run_job_v2(job_id: str):
                 "Maps URL":       d.get("listing_url", ""),
             }
 
-        for batch_start in range(0, len(work_items), V2_BATCH_SIZE):
+        pending_work_items = []
+        for platform_name, query, scraper_fn in work_items:
+            item_key = make_job_item_key(platform_name, query)
+            item_state = progress_items.get(item_key) or {}
+            if item_state.get("completed"):
+                continue
+            pending_work_items.append((platform_name, query, scraper_fn))
+
+        for batch_start in range(0, len(pending_work_items), V2_BATCH_SIZE):
             if job.get("cancelled"):
                 break
 
-            batch = work_items[batch_start: batch_start + V2_BATCH_SIZE]
+            batch = pending_work_items[batch_start: batch_start + V2_BATCH_SIZE]
             batch_started = time.perf_counter()
             for platform_name, query, _ in batch:
                 label = f"{query} in {city}  [{platform_name}]"
@@ -1542,12 +1889,22 @@ async def run_job_v2(job_id: str):
                 total_raw_found += len(results)
                 current_step += 1
                 label = f"{query} in {city}  [{platform_name}]"
+                item_key = make_job_item_key(platform_name, query)
+                item_state = progress_items.setdefault(item_key, {})
+                item_state["completed"] = True
+                progress_marker["current_item"] = None
+                save_job_progress_marker(conn, job_id, progress_marker)
                 publish_event(job, {"type": "info", "data": f"[{platform_name}] {len(results)} leads for '{query}'"})
                 if failure_reason:
                     publish_event(job, {"type": "info", "data": f"[{platform_name}] Source issue: {failure_reason}"})
                 publish_event(job, {"type": "progress", "data": {
                     "current": current_step, "total": total_steps, "query": label,
                 }})
+                conn.execute(
+                    "UPDATE jobs SET processed_areas=? WHERE job_id=?",
+                    (current_step, job_id),
+                )
+                conn.commit()
                 batch_leads.extend(results)
 
             if not batch_leads:
@@ -1708,7 +2065,8 @@ async def start_scrape_v2(body: ScrapeV2Body, background_tasks: BackgroundTasks,
     plan = (usage.get("plan") or "free").lower()
     is_admin = (current_user.get("role") or "user").lower() == "admin"
     max_jobs = 999 if is_admin else 2 if plan == "starter" else 3 if plan == "pro" else 5 if plan in ("agency", "enterprise") else 1
-    active_for_user = sum(1 for j in active_jobs.values() if j.get("user_id") == user_id and j.get("status") in ("pending", "running", "stopping"))
+    history_rows = list_user_history_supabase(user_id)
+    active_for_user = sum(1 for row in history_rows if (row.get("status") or "").lower() in ("pending", "queued", "running", "stopping"))
     
     if active_for_user >= max_jobs:
         raise HTTPException(
@@ -1720,18 +2078,22 @@ async def start_scrape_v2(body: ScrapeV2Body, background_tasks: BackgroundTasks,
     platforms = sum([body.enable_maps, body.enable_justdial, body.enable_indiamart])
     total     = len(body.queries) * platforms
     conn = get_db()
+    worker_type = "maps_worker" if body.enable_maps else "api"
+    initial_status = "queued" if worker_type == "maps_worker" else "pending"
     conn.execute(
         """INSERT INTO jobs
            (job_id,user_id,profession,location,niche,areas,status,
-            processed_areas,completed_area_indexes,total_areas,root_job_id)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+            processed_areas,completed_area_indexes,total_areas,root_job_id,resumed_from_job_id,progress_marker)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (
             job_id, user_id,
             ", ".join(body.queries),
             body.city,
             body.niche,
             json.dumps(body.queries),
-            "pending", 0, "[]", total, job_id,
+            initial_status, 0, "[]", total, body.root_job_id or job_id,
+            body.resumed_from_job_id,
+            json.dumps(body.progress_marker or {"version": 1, "items": {}, "current_item": None}),
         ),
     )
     conn.commit()
@@ -1743,8 +2105,23 @@ async def start_scrape_v2(body: ScrapeV2Body, background_tasks: BackgroundTasks,
         queries=body.queries,
         platforms=requested_platforms,
         website_filter=body.website_filter,
-        status="pending",
+        status=initial_status,
+        worker_type=worker_type,
+        max_per_query=body.max_per_query,
+        niche=body.niche,
+        progress_message="Queued for Maps worker" if worker_type == "maps_worker" else "Queued for worker",
+        current_query="",
+        total_areas=total,
+        processed_areas=0,
+        progress_marker=body.progress_marker or {"version": 1, "items": {}, "current_item": None},
+        recent_events=[],
+        root_job_id=body.root_job_id or job_id,
+        resumed_from_job_id=body.resumed_from_job_id,
+        cancel_requested=False,
     )
+
+    if worker_type == "maps_worker":
+        return success_response({"job_id": job_id}, message="Scrape job queued", job_id=job_id)
 
     active_jobs[job_id] = {
         "status":          "pending",
@@ -1770,6 +2147,7 @@ async def start_scrape_v2(body: ScrapeV2Body, background_tasks: BackgroundTasks,
         "finished_at":     None,
         "current_query":   "",
         "progress_message": "Queued for worker",
+        "progress_marker": body.progress_marker or {"version": 1, "items": {}, "current_item": None},
     }
     try:
         _job_queue.put_nowait((job_id, "v2"))
@@ -2086,12 +2464,43 @@ async def start_scrape(body: ScrapeBody, current_user=Depends(get_current_user))
 @app.post("/scrape/stop/{job_id}")
 def stop_scrape(job_id: str, current_user=Depends(get_current_user)):
     if job_id in active_jobs and active_jobs[job_id].get("user_id") == current_user["id"]:
-        active_jobs[job_id]["cancelled"] = True
-        active_jobs[job_id]["status"] = "stopping"
-        try:
-            update_scrape_job(job_id, status="stopping")
-        except Exception:
-            pass
+        current_status = active_jobs[job_id].get("status")
+        if current_status in ("pending", "running"):
+            active_jobs[job_id]["cancelled"] = True
+            active_jobs[job_id]["status"] = "stopping"
+            try:
+                update_scrape_job(job_id, status="stopping")
+            except Exception:
+                pass
+        else:
+            return success_response(
+                {"job_id": job_id, "already_finished": True, "status": current_status},
+                message="Scrape job already finished",
+                ok=True,
+                job_id=job_id,
+                already_finished=True,
+                status=current_status,
+            )
+    else:
+        remote_job = get_scrape_job(job_id)
+        if remote_job and remote_job.get("worker_type") == "maps_worker" and remote_job.get("user_id") == current_user["id"]:
+            remote_status = (remote_job.get("status") or "").lower()
+            if remote_status in ("queued", "running"):
+                update_scrape_job(
+                    job_id,
+                    status="stopping",
+                    cancel_requested=True,
+                    progress_message="Stopping scrape...",
+                )
+            else:
+                return success_response(
+                    {"job_id": job_id, "already_finished": True, "status": remote_status},
+                    message="Scrape job already finished",
+                    ok=True,
+                    job_id=job_id,
+                    already_finished=True,
+                    status=remote_status,
+                )
     return success_response({"job_id": job_id}, message="Scrape stop requested", ok=True, job_id=job_id)
 
 
@@ -2145,6 +2554,20 @@ def heartbeat(job_id: str, current_user=Depends(get_current_user)):
             "lead_count": int(job.get("lead_count", 0)),
             "processed_areas": int(job.get("processed_areas", 0)),
         }, message="Heartbeat loaded", alive=True, status=job.get("status", "unknown"))
+    remote_job = get_scrape_job(job_id)
+    if remote_job and remote_job.get("worker_type") == "maps_worker" and remote_job.get("user_id") == current_user["id"]:
+        status = (remote_job.get("status") or "queued").lower()
+        return success_response(
+            {
+                "alive": status in ("queued", "running", "stopping"),
+                "status": status,
+                "lead_count": int(remote_job.get("leads_found") or 0),
+                "processed_areas": int(remote_job.get("processed_areas") or 0),
+            },
+            message="Heartbeat loaded",
+            alive=status in ("queued", "running", "stopping"),
+            status=status,
+        )
     return success_response({"alive": False, "status": "not_running"}, message="No active job", alive=False, status="not_running")
 
 
@@ -2163,6 +2586,7 @@ async def resume_scrape(job_id: str, body: ResumeBody, current_user=Depends(get_
         original_areas = json.loads(row["areas"] or "[]")
     except Exception:
         original_areas = []
+    progress_marker = load_job_progress_marker(row)
 
     processed = int(row["processed_areas"] or 0)
     completed_indexes = set()
@@ -2193,15 +2617,47 @@ async def resume_scrape(job_id: str, body: ResumeBody, current_user=Depends(get_
     if existing_job_id:
         return success_response({"job_id": existing_job_id, "reused": True}, message="Existing running job reused", job_id=existing_job_id, reused=True)
 
-    return await start_scrape(ScrapeBody(
-        profession=row["profession"] or "",
-        areas=remaining,
-        user_id=current_user["id"],
-        niche=target_niche,
-        location=target_location,
-        root_job_id=row["root_job_id"] or row["job_id"],
-        resumed_from_job_id=row["job_id"],
-    ))
+    history_rows = list_user_history_supabase(current_user["id"])
+    history_row = next((item for item in history_rows if item.get("job_id") == row["job_id"]), None)
+    platforms = (history_row or {}).get("platforms") or {}
+    is_v2_job = bool(platforms) or (bool(original_areas) and (row["location"] or "") not in original_areas)
+
+    if is_v2_job:
+        remote_job = get_scrape_job(job_id) or {}
+        remote_queries = _normalize_supabase_queries(remote_job.get("queries")) or original_areas
+        remote_progress_marker = _normalize_supabase_progress_marker(remote_job.get("progress_marker")) if remote_job else progress_marker
+        resumed_progress_marker = {"version": 1, "items": {}, "current_item": None} if body.restart_from_beginning else remote_progress_marker
+        return await start_scrape_v2(
+            ScrapeV2Body(
+                user_id=current_user["id"],
+                niche=target_niche,
+                city=(remote_job.get("city") or row["location"] or target_location),
+                queries=remote_queries or remaining,
+                enable_maps=bool(platforms.get("maps", True)),
+                enable_justdial=bool(platforms.get("justdial", False)),
+                enable_indiamart=bool(platforms.get("indiamart", False)),
+                website_filter=(remote_job.get("website_filter") or (history_row or {}).get("website_filter") or "minimal"),
+                max_per_query=int(remote_job.get("max_per_query") or 25),
+                root_job_id=remote_job.get("root_job_id") or row["root_job_id"] or row["job_id"],
+                resumed_from_job_id=row["job_id"],
+                progress_marker=resumed_progress_marker,
+            ),
+            BackgroundTasks(),
+            current_user=current_user,
+        )
+
+    return await start_scrape(
+        ScrapeBody(
+            profession=row["profession"] or "",
+            areas=remaining,
+            user_id=current_user["id"],
+            niche=target_niche,
+            location=target_location,
+            root_job_id=row["root_job_id"] or row["job_id"],
+            resumed_from_job_id=row["job_id"],
+        ),
+        current_user=current_user,
+    )
 
 
 @app.get("/scrape/status/{job_id}")
@@ -2224,6 +2680,13 @@ def scrape_status(job_id: str, current_user=Depends(get_current_user)):
             "profession": job.get("profession", ""),
             "location": job.get("location", ""),
         }
+        return success_response(payload, message="Scrape status loaded", **payload)
+
+    remote_job = get_scrape_job(job_id)
+    if remote_job and remote_job.get("worker_type") == "maps_worker":
+        if remote_job.get("user_id") != current_user["id"]:
+            raise HTTPException(403, "Access denied")
+        payload = _build_supabase_job_status_payload(remote_job)
         return success_response(payload, message="Scrape status loaded", **payload)
 
     conn = get_db()

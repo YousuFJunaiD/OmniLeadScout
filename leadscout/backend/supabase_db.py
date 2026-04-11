@@ -175,6 +175,7 @@ def create_scrape_job(
     platforms: Dict[str, bool],
     website_filter: str,
     status: str = "running",
+    **extra_fields: Any,
 ) -> None:
     payload = {
         "id": job_id,
@@ -186,6 +187,7 @@ def create_scrape_job(
         "status": status,
         "leads_found": 0,
     }
+    payload.update({key: value for key, value in extra_fields.items() if value is not None})
     get_supabase().table("scrape_jobs").upsert(payload).execute()
 
 
@@ -193,6 +195,60 @@ def update_scrape_job(job_id: str, **fields: Any) -> None:
     if not fields:
         return
     get_supabase().table("scrape_jobs").update(fields).eq("id", job_id).execute()
+
+
+def get_scrape_job(job_id: str) -> Optional[Dict[str, Any]]:
+    resp = (
+        get_supabase()
+        .table("scrape_jobs")
+        .select("*")
+        .eq("id", job_id)
+        .limit(1)
+        .execute()
+    )
+    return _single(resp)
+
+
+def list_worker_scrape_jobs(worker_type: str, statuses: List[str], limit: int = 5) -> List[Dict[str, Any]]:
+    query = (
+        get_supabase()
+        .table("scrape_jobs")
+        .select("*")
+        .eq("worker_type", worker_type)
+        .order("created_at", desc=False)
+        .limit(limit)
+    )
+    if statuses:
+        query = query.in_("status", statuses)
+    resp = query.execute()
+    return _rows(resp)
+
+
+def claim_scrape_job(job_id: str, worker_type: str, worker_id: str) -> Optional[Dict[str, Any]]:
+    now = datetime.now(timezone.utc).isoformat()
+    resp = (
+        get_supabase()
+        .table("scrape_jobs")
+        .update(
+            {
+                "status": "running",
+                "worker_type": worker_type,
+                "worker_id": worker_id,
+                "claimed_at": now,
+                "started_at": now,
+            }
+        )
+        .eq("id", job_id)
+        .eq("status", "queued")
+        .execute()
+    )
+    row = _single(resp)
+    if row:
+        return row
+    row = get_scrape_job(job_id)
+    if row and row.get("worker_id") == worker_id and row.get("status") == "running":
+        return row
+    return None
 
 
 def save_leads(job_id: str, user_id: str, leads: List[Dict[str, Any]]) -> None:
@@ -243,14 +299,21 @@ def list_user_history(user_id: str) -> List[Dict[str, Any]]:
     history = []
     for row in _rows(resp):
         queries = row.get("queries") or []
+        platforms = row.get("platforms") or {}
         if isinstance(queries, str):
             try:
                 queries = json.loads(queries)
             except Exception:
                 queries = [queries]
+        if isinstance(platforms, str):
+            try:
+                platforms = json.loads(platforms)
+            except Exception:
+                platforms = {}
         history.append(
             {
                 **row,
+                "platforms": platforms,
                 "job_id": row.get("id"),
                 "profession": ", ".join(queries) if isinstance(queries, list) else str(queries or ""),
                 "location": row.get("city") or "",
@@ -258,8 +321,8 @@ def list_user_history(user_id: str) -> List[Dict[str, Any]]:
                 "effective_lead_count": row.get("leads_found", 0),
                 "persisted_leads": row.get("leads_found", 0),
                 "areas": json.dumps(queries if isinstance(queries, list) else []),
-                "total_areas": len(queries) if isinstance(queries, list) else 0,
-                "processed_areas": len(queries) if row.get("status") in ("completed", "stopped", "no_results") and isinstance(queries, list) else 0,
+                "total_areas": row.get("total_areas") if row.get("total_areas") is not None else (len(queries) if isinstance(queries, list) else 0),
+                "processed_areas": row.get("processed_areas") if row.get("processed_areas") is not None else (len(queries) if row.get("status") in ("completed", "stopped", "no_results", "low_data", "source_error") and isinstance(queries, list) else 0),
                 "niche": f"{(queries[0] if isinstance(queries, list) and queries else 'leads')}_{row.get('city') or 'city'}".replace(" ", "_").lower(),
             }
         )
