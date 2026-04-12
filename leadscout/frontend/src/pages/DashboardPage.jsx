@@ -4,9 +4,8 @@ import { useNavigate } from "react-router-dom"
 import Nav from "../components/Nav"
 import SparklesBg from "../components/SparklesBg"
 import { authFetch, canDownloadCsv, getAuthHeaders } from "../lib/auth"
-import { apiUrl } from "../lib/api"
+import { apiUrl, wsUrl } from "../lib/api"
 
-const WS_BASE = `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}/api`
 const LIVE_FEED_MAX_ROWS = 200
 const LIVE_FEED_FLUSH_MS = 700
 const STATUS_POLL_MS = 1500
@@ -840,7 +839,7 @@ export default function DashboardPage({ user, onLogout }) {
     }
 
     console.log(`[WS] Connecting to /ws/${id} (attempt ${retryCountRef.current})`)
-    const ws = new WebSocket(`${WS_BASE}/ws/${id}`)
+    const ws = new WebSocket(wsUrl(`/ws/${id}`))
     wsRef.current = ws
 
     ws.onopen = () => {
