@@ -114,7 +114,7 @@ const ADDONS = [
 const FAQS = [
   {
     q: "Why Growth over Pro?",
-    a: "Pro users hit the 3,500 lead cap by day 18 on average. Growth gives you 10,000 leads, unlimited searches, all 3 platforms, and AI scoring — for agencies serious about building pipeline.",
+    a: "Pro users hit the 3,500 lead cap by day 18 on average. Growth gives you 10,000 leads, unlimited searches, all 3 sources, and AI scoring — for agencies serious about building pipeline.",
   },
   {
     q: "Can I try before committing?",
@@ -126,7 +126,7 @@ const FAQS = [
   },
   {
     q: "How accurate are phone numbers?",
-    a: "Pro gives 65–70% coverage with partial numbers. Growth delivers 88%+ verified full numbers, sourced and cross-referenced from multiple directories.",
+    a: "Pro gives 65–70% coverage with partial numbers. Growth delivers 88%+ verified full numbers, sourced and cross-referenced across included sources.",
   },
   {
     q: "Do add-ons roll over?",
