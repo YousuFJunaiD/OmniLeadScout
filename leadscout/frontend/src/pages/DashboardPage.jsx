@@ -557,31 +557,53 @@ export default function DashboardPage({ user, onLogout }) {
     return "Source access: 1 source included"
   }
 
+  const stageOrder = ["searching", "expanding", "filtering", "finalizing"]
+  const stageMeta = {
+    searching: { label: "Searching", detail: "Scanning the best matches for your search" },
+    expanding: { label: "Expanding", detail: "Widening the search to find more leads" },
+    filtering: { label: "Filtering", detail: "Cleaning, ranking, and removing duplicates" },
+    finalizing: { label: "Finalizing", detail: "Saving your best lead matches" },
+  }
+
+  const getStageFromText = (value = "") => {
+    const lower = String(value || "").toLowerCase()
+    if (!lower) return "searching"
+    if (lower.includes("expand") || lower.includes("nearby") || lower.includes("broaden")) return "expanding"
+    if (lower.includes("filter") || lower.includes("process")) return "filtering"
+    if (lower.includes("final") || lower.includes("saving") || lower.includes("complete")) return "finalizing"
+    return "searching"
+  }
+
   const sanitizeFeedMessage = (value, fallback = "Starting search") => {
     const text = toFeedText(value, fallback).trim()
     if (!text) return fallback
     const lower = text.toLowerCase()
-    if (lower.includes("browsertype.launch") || lower.includes("playwright") || lower.includes("traceback") || lower.includes("stack trace")) {
-      return "Source temporarily unavailable, trying next route"
-    }
-    if (lower.includes("debug artifacts") || lower.includes("score=") || lower.includes("selected high_quality") || lower.includes("fallback-kept")) {
+    if (
+      lower.includes("browsertype.launch") ||
+      lower.includes("playwright") ||
+      lower.includes("traceback") ||
+      lower.includes("stack trace") ||
+      lower.includes("debug artifacts") ||
+      lower.includes("score=") ||
+      lower.includes("selected high_quality") ||
+      lower.includes("fallback-kept") ||
+      lower.includes("justdial") ||
+      lower.includes("indiamart") ||
+      lower.includes("google maps") ||
+      lower.includes("maps") ||
+      lower.includes("apify") ||
+      /\[\w+/.test(text)
+    ) {
       return ""
     }
-    if (lower.includes("searching sources")) return "Starting search"
-    if (lower.includes("processing results")) return "Processing results"
-    if (lower.includes("saving leads")) return "Finalizing leads"
-    if (lower.includes("source issue") || lower.includes("source blocked") || lower.includes("retry") || lower.includes("blocked")) {
-      return "Source temporarily unavailable, trying next route"
-    }
+    if (lower.includes("searching sources")) return "Searching"
+    if (lower.includes("processing results")) return "Filtering"
+    if (lower.includes("saving leads")) return "Finalizing"
+    if (lower.includes("expanding") || lower.includes("nearby") || lower.includes("broaden")) return "Expanding"
+    if (lower.includes("source issue") || lower.includes("source blocked") || lower.includes("retry") || lower.includes("blocked")) return "Expanding"
     if (lower.includes("no data found")) return "Search completed with no matching leads"
-    if (lower.includes("fetching") || lower.includes("listing page") || lower.includes("waiting for results")) {
-      return "Source in progress"
-    }
-    if (lower.includes("scrape finished") || lower.includes("saving leads complete")) return "Completed"
-    if (/\[\w+/.test(text) || lower.includes("justdial") || lower.includes("indiamart") || lower.includes("google maps") || lower.includes("maps")) {
-      if (lower.includes("leads for")) return "Source in progress"
-      return "Starting search"
-    }
+    if (lower.includes("fetching") || lower.includes("listing page") || lower.includes("waiting for results")) return "Searching"
+    if (lower.includes("scrape finished") || lower.includes("saving leads complete")) return "Finalizing"
     return text
   }
 
@@ -620,6 +642,13 @@ export default function DashboardPage({ user, onLogout }) {
     setFeedMessages((prev) => [{ id: `${Date.now()}-${prev.length}`, text: message, tone }, ...prev].slice(0, 18))
   }
 
+  const currentStage = useMemo(() => {
+    if (!scraping && progress.total > 0 && progress.current >= progress.total) return "finalizing"
+    return getStageFromText(runtimeStatus || progress.query || feedMessages[0]?.text || "")
+  }, [scraping, progress.total, progress.current, runtimeStatus, progress.query, feedMessages])
+
+  const currentStageIndex = Math.max(0, stageOrder.indexOf(currentStage))
+
   const applyStatusSnapshot = (status) => {
     if (!status) return
     setProgress((prev) => ({
@@ -644,13 +673,11 @@ export default function DashboardPage({ user, onLogout }) {
       if (type === "lead" && event?.data) {
         queueLeadForUi(event.data)
       } else if (type === "progress") {
-        const data = event.data || {}
-        pushFeedMessage(`Progress ${data.current || 0}/${data.total || 0}`)
+        pushFeedMessage(status.progress_message || "Searching")
       } else if (type === "error") {
-        pushFeedMessage(event.data || "Source temporarily unavailable, trying next route", "error")
+        pushFeedMessage("Expanding", "warn")
       } else if (type === "block_wait") {
-        const data = event.data || {}
-        pushFeedMessage("Source temporarily unavailable, trying next route", "warn")
+        pushFeedMessage("Expanding", "warn")
       } else {
         pushFeedMessage(event?.data ?? type)
       }
@@ -891,14 +918,14 @@ export default function DashboardPage({ user, onLogout }) {
         setLiveUrl(msg.data || { maps_url: "", website_url: "", name: "" })
       } else if (msg.type === "progress") {
         setProgress((prev) => ({ ...prev, ...(msg.data || {}), query: "" }))
-        pushFeedMessage(`Progress ${msg.data?.current || 0}/${msg.data?.total || 0}`)
+        pushFeedMessage(runtimeStatus || "Searching")
       } else if (msg.type === "info") {
         const text = sanitizeFeedMessage(msg.data, "")
         setRuntimeStatus(text)
         pushFeedMessage(text)
       } else if (msg.type === "block_wait") {
-        setRuntimeStatus("Source temporarily unavailable, trying next route")
-        pushFeedMessage("Source temporarily unavailable, trying next route", "warn")
+        setRuntimeStatus("Expanding")
+        pushFeedMessage("Expanding", "warn")
       } else if (msg.type === "done") {
         flushLiveFeed()
         keepSocketAliveRef.current = false
@@ -1341,6 +1368,16 @@ export default function DashboardPage({ user, onLogout }) {
 
   return (
     <div className="page">
+      <style>{`
+        @keyframes dashboardPulse {
+          0%, 100% { transform: translateY(0); opacity: 0.35; }
+          50% { transform: translateY(-3px); opacity: 1; }
+        }
+        @keyframes dashboardFloat {
+          0%, 100% { transform: translateY(0); opacity: 0.12; }
+          50% { transform: translateY(-6px); opacity: 0.2; }
+        }
+      `}</style>
       <SparklesBg />
       <Nav user={user} onLogout={onLogout} />
       <div style={{ paddingTop: 64, minHeight: "100vh" }}>
@@ -1607,13 +1644,49 @@ export default function DashboardPage({ user, onLogout }) {
                   <div className="dashboard-progress-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                       {scraping && <span className="stat-pill"><span className="dot" /> Running</span>}
-                      <span style={{ fontSize: 13, color: "var(--text-secondary)" }}>{runtimeStatus || "Fetching results..."}</span>
+                      <span style={{ fontSize: 13, color: "var(--text-secondary)" }}>{stageMeta[currentStage]?.label || "Searching"}</span>
                     </div>
                     <span style={{ fontSize: 13, fontFamily: "var(--font-mono)", color: "var(--accent-cyan)" }}>{progress.current}/{progress.total}</span>
                   </div>
                   <div className="progress-bar"><div className="progress-fill" style={{ width: `${pct}%` }} /></div>
-                  <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 6, textAlign: "right" }}>{pct}% complete</div>
-                  {!!runtimeStatus && <div style={{ marginTop: 8, fontSize: 12, color: "var(--accent-gold)" }}>{runtimeStatus}</div>}
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginTop: 10, flexWrap: "wrap" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      {scraping && (
+                        <div style={{ display: "inline-flex", gap: 5, alignItems: "center" }}>
+                          <span style={{ width: 8, height: 8, borderRadius: 999, background: "var(--accent-cyan)", animation: "dashboardPulse 1s ease-in-out infinite" }} />
+                          <span style={{ width: 8, height: 8, borderRadius: 999, background: "var(--accent-cyan)", opacity: 0.7, animation: "dashboardPulse 1s ease-in-out .18s infinite" }} />
+                          <span style={{ width: 8, height: 8, borderRadius: 999, background: "var(--accent-cyan)", opacity: 0.45, animation: "dashboardPulse 1s ease-in-out .36s infinite" }} />
+                        </div>
+                      )}
+                      <div>
+                        <div style={{ fontSize: 12, fontWeight: 700, color: "var(--text-primary)" }}>{stageMeta[currentStage]?.label || "Searching"}</div>
+                        <div style={{ fontSize: 11, color: "var(--text-muted)" }}>{stageMeta[currentStage]?.detail || "Finding your best matches"}</div>
+                      </div>
+                    </div>
+                    <div style={{ fontSize: 11, color: "var(--text-muted)", textAlign: "right" }}>{pct}% complete</div>
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(4,minmax(0,1fr))", gap: 8, marginTop: 14 }}>
+                    {stageOrder.map((stage, index) => {
+                      const active = stage === currentStage
+                      const reached = index <= currentStageIndex
+                      return (
+                        <div
+                          key={stage}
+                          style={{
+                            border: `1px solid ${active ? "var(--accent-cyan)" : "var(--border)"}`,
+                            borderRadius: "var(--radius-sm)",
+                            padding: "10px 8px",
+                            background: reached ? "rgba(255,255,255,0.04)" : "transparent",
+                            textAlign: "center",
+                          }}
+                        >
+                          <div style={{ fontSize: 10, letterSpacing: "0.08em", textTransform: "uppercase", color: active ? "var(--accent-cyan)" : "var(--text-muted)" }}>
+                            {stageMeta[stage].label}
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
                   {scraping && liveUrl.name && (
                     <div className="dashboard-live-url" style={{ marginTop: 10, padding: "10px 14px", background: "var(--bg-surface)", borderRadius: "var(--radius-sm)", fontSize: 12 }}>
                       <div style={{ color: "var(--accent-cyan)", fontWeight: 600, marginBottom: 4 }}>Search in progress</div>
@@ -1636,7 +1709,7 @@ export default function DashboardPage({ user, onLogout }) {
 
               <div className="card" style={{ padding: 0, overflow: "hidden" }}>
                 <div className="dashboard-section-header" style={{ padding: "16px 20px", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <p style={{ fontSize: 13, fontWeight: 600 }}>Live Feed {scraping && <span style={{ fontSize: 11, color: "var(--accent-green)", marginLeft: 6 }}>● incoming</span>}</p>
+                  <p style={{ fontSize: 13, fontWeight: 600 }}>Progress States {scraping && <span style={{ fontSize: 11, color: "var(--accent-green)", marginLeft: 6 }}>● live</span>}</p>
                   {stats.total > 0 && <span style={{ fontSize: 11, color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>{stats.total} collected</span>}
                 </div>
                 <div ref={tableRef} style={{ maxHeight: 480, overflowY: "auto" }}>
@@ -1647,18 +1720,27 @@ export default function DashboardPage({ user, onLogout }) {
                           key={message.id}
                           style={{
                             fontSize: 12,
-                            color: message.tone === "error" ? "var(--accent-red)" : message.tone === "warn" ? "var(--accent-gold)" : "var(--text-secondary)",
-                            borderBottom: "1px solid var(--border)",
-                            paddingBottom: 10,
+                            color: "var(--text-secondary)",
+                            border: "1px solid var(--border)",
+                            borderRadius: "var(--radius-sm)",
+                            padding: "12px 14px",
+                            background: "rgba(255,255,255,0.02)",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "space-between",
+                            gap: 10,
                           }}
                         >
-                          {message.text}
+                          <span>{message.text}</span>
+                          <span style={{ fontSize: 10, color: "var(--text-muted)", letterSpacing: "0.08em", textTransform: "uppercase" }}>
+                            {stageMeta[getStageFromText(message.text)]?.label || "Update"}
+                          </span>
                         </div>
                       ))}
                     </div>
                   ) : leads.length === 0 ? (
                     <div style={{ padding: "60px 20px", textAlign: "center" }}>
-                      <div style={{ fontSize: 40, opacity: 0.15, marginBottom: 12 }}>◈</div>
+                      <div style={{ fontSize: 40, opacity: 0.15, marginBottom: 12, animation: scraping ? "dashboardFloat 1.6s ease-in-out infinite" : "none" }}>◈</div>
                       <p style={{ color: "var(--text-muted)", fontSize: 13 }}>
                         {scraping ? "Scraping — leads appear here in real time..." : "Configure and launch to start collecting leads"}
                       </p>
