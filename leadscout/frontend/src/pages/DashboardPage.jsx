@@ -1365,6 +1365,21 @@ export default function DashboardPage({ user, onLogout }) {
   const usageUnlimited = !Number.isFinite(usageLimit) || usageLimit <= 0
   const usagePct = !usageUnlimited ? Math.min(100, Math.round((usageCount / usageLimit) * 100)) : 0
   const usageWarning = usagePct >= 100 ? "hard" : usagePct >= 80 ? "soft" : "none"
+  const activeAddons = Array.isArray(usage?.active_addons) ? usage.active_addons : []
+  const addonSummary = useMemo(() => {
+    const labels = []
+    const leadBoost = activeAddons
+      .filter((item) => item?.addon_type === "leads")
+      .reduce((sum, item) => sum + (Number(item?.quantity || 1) * 1000), 0)
+    if (leadBoost > 0) labels.push(`+${leadBoost.toLocaleString("en-IN")} leads`)
+    if (activeAddons.some((item) => item?.addon_type === "retention")) labels.push("Extended retention")
+    if (activeAddons.some((item) => item?.addon_type === "scoring")) labels.push("Lead scoring")
+    if (activeAddons.some((item) => item?.addon_type === "crm")) labels.push("CRM sync")
+    if (activeAddons.some((item) => item?.addon_type === "automation")) labels.push("Automation")
+    return labels
+  }, [activeAddons])
+  const effectiveFeatures = usage?.effective_features || {}
+  const retentionDays = planLimits?.retention_days
 
   return (
     <div className="page">
@@ -1611,6 +1626,17 @@ export default function DashboardPage({ user, onLogout }) {
                         Plan: {activePlan.toUpperCase()} · Searches today: {usage.searches_today}
                         {planLimits?.searches !== null && planLimits?.searches !== undefined && Number.isFinite(planLimits.searches) ? ` / ${planLimits.searches}` : " / Unlimited"}
                       </div>
+                      {(addonSummary.length > 0 || retentionDays || effectiveFeatures.lead_scoring || effectiveFeatures.crm_sync || effectiveFeatures.automation) && (
+                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
+                          {addonSummary.map((label) => (
+                            <span key={label} className="badge badge-cyan">{label}</span>
+                          ))}
+                          {retentionDays ? <span className="badge badge-gold">{retentionDays} day retention</span> : <span className="badge badge-gold">Unlimited retention</span>}
+                          {effectiveFeatures.lead_scoring ? <span className="badge badge-green">Lead scoring enabled</span> : null}
+                          {effectiveFeatures.crm_sync ? <span className="badge badge-green">CRM sync enabled</span> : null}
+                          {effectiveFeatures.automation ? <span className="badge badge-green">Automation enabled</span> : null}
+                        </div>
+                      )}
                     </div>
                     <button className="btn btn-ghost" style={{ padding: "8px 14px" }} onClick={() => navigate("/pricing")}>
                       Upgrade

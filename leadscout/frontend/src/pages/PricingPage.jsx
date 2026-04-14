@@ -41,7 +41,7 @@ const PLANS = [
     strike: 3299,
     popular: false,
     features: [
-      { text: "3,500 leads / month",       ok: true  },
+      { text: "1,000 leads / month",       ok: true  },
       { text: "50 searches / day",          ok: true  },
       { text: "2 sources included",         ok: true  },
       { text: "Phone numbers (partial)",    ok: true  },
@@ -66,7 +66,7 @@ const PLANS = [
     strike: 7999,
     popular: true,
     features: [
-      { text: "10,000 leads / month",                    ok: true },
+      { text: "5,000 leads / month",                     ok: true },
       { text: "Unlimited searches",                       ok: true },
       { text: "3 sources included",                       ok: true },
       { text: "Full phone numbers (88%+ verified)",       ok: true },
@@ -114,7 +114,7 @@ const ADDONS = [
 const FAQS = [
   {
     q: "Why Growth over Pro?",
-    a: "Pro users hit the 3,500 lead cap by day 18 on average. Growth gives you 10,000 leads, unlimited searches, all 3 sources, and AI scoring — for agencies serious about building pipeline.",
+    a: "Pro gives you 1,000 leads each month. Growth gives you 5,000 leads, unlimited searches, all 3 sources, and AI scoring — for teams that need deeper coverage and more volume.",
   },
   {
     q: "Can I try before committing?",
