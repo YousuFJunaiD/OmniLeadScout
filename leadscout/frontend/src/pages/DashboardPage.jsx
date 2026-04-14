@@ -1024,6 +1024,7 @@ export default function DashboardPage({ user, onLogout }) {
           niche:           `${finalQueries[0]}_${finalCity}`.replace(/ /g, "_").toLowerCase(),
           city:            finalCity,
           queries:         finalQueries,
+          areas:           selAreas.length ? selAreas : [],
           enable_maps:     requestedPlatforms.maps,
           enable_justdial: requestedPlatforms.justdial,
           enable_indiamart: requestedPlatforms.indiamart,
