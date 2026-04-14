@@ -515,9 +515,22 @@ export default function DashboardPage({ user, onLogout }) {
 
   const toReadableError = (value, fallback = "Something went wrong") => {
     if (!value) return fallback
-    if (typeof value === "string") return value
+    if (typeof value === "string") {
+      const lower = value.toLowerCase()
+      if (lower.includes("failed to fetch") || lower.includes("networkerror") || lower.includes("load failed") || lower.includes("cors")) {
+        return "Connection issue. Retrying..."
+      }
+      if (lower.includes("session invalid") || lower.includes("another device") || lower.includes("authorization")) {
+        return "Your session has expired. Please sign in again."
+      }
+      if (lower.includes("internal server error")) {
+        return "We couldn't start this search. Please try again."
+      }
+      return value
+    }
     if (typeof value === "object") {
-      return value.error || value.detail || value.message || fallback
+      const raw = value.error || value.detail || value.message || fallback
+      return toReadableError(raw, fallback)
     }
     return fallback
   }
@@ -559,10 +572,10 @@ export default function DashboardPage({ user, onLogout }) {
 
   const stageOrder = ["searching", "expanding", "filtering", "finalizing"]
   const stageMeta = {
-    searching: { label: "Searching", detail: "Scanning the best matches for your search" },
-    expanding: { label: "Expanding", detail: "Widening the search to find more leads" },
-    filtering: { label: "Filtering", detail: "Cleaning, ranking, and removing duplicates" },
-    finalizing: { label: "Finalizing", detail: "Saving your best lead matches" },
+    searching: { label: "Searching", detail: "Searching selected area" },
+    expanding: { label: "Expanding", detail: "Expanding coverage" },
+    filtering: { label: "Filtering", detail: "Filtering strongest leads" },
+    finalizing: { label: "Finalizing", detail: "Finalizing results" },
   }
 
   const getStageFromText = (value = "") => {
@@ -596,13 +609,14 @@ export default function DashboardPage({ user, onLogout }) {
     ) {
       return ""
     }
-    if (lower.includes("searching sources")) return "Searching"
-    if (lower.includes("processing results")) return "Filtering"
-    if (lower.includes("saving leads")) return "Finalizing"
-    if (lower.includes("expanding") || lower.includes("nearby") || lower.includes("broaden")) return "Expanding"
+    if (lower.includes("searching sources")) return "Starting search"
+    if (lower.includes("processing results")) return "Filtering strongest leads"
+    if (lower.includes("saving leads")) return "Finalizing results"
+    if (lower.includes("expanding") || lower.includes("nearby") || lower.includes("broaden")) return "Expanding coverage"
+    if (lower.includes("selected area")) return "Searching selected area"
     if (lower.includes("source issue") || lower.includes("source blocked") || lower.includes("retry") || lower.includes("blocked")) return "Expanding"
     if (lower.includes("no data found")) return "Search completed with no matching leads"
-    if (lower.includes("fetching") || lower.includes("listing page") || lower.includes("waiting for results")) return "Searching"
+    if (lower.includes("fetching") || lower.includes("listing page") || lower.includes("waiting for results")) return "Searching selected area"
     if (lower.includes("scrape finished") || lower.includes("saving leads complete")) return "Finalizing"
     return text
   }
@@ -1388,6 +1402,15 @@ export default function DashboardPage({ user, onLogout }) {
           0%, 100% { transform: translateY(0); opacity: 0.35; }
           50% { transform: translateY(-3px); opacity: 1; }
         }
+        @keyframes dashboardPulseRing {
+          0%, 100% { transform: scale(1); box-shadow: 0 0 18px rgba(90,216,255,0.2); }
+          50% { transform: scale(1.04); box-shadow: 0 0 28px rgba(90,216,255,0.4); }
+        }
+        @keyframes dashboardShimmer {
+          0% { filter: brightness(0.95); opacity: 0.7; }
+          50% { filter: brightness(1.2); opacity: 1; }
+          100% { filter: brightness(0.95); opacity: 0.7; }
+        }
         @keyframes dashboardFloat {
           0%, 100% { transform: translateY(0); opacity: 0.12; }
           50% { transform: translateY(-6px); opacity: 0.2; }
@@ -1674,8 +1697,59 @@ export default function DashboardPage({ user, onLogout }) {
                     </div>
                     <span style={{ fontSize: 13, fontFamily: "var(--font-mono)", color: "var(--accent-cyan)" }}>{progress.current}/{progress.total}</span>
                   </div>
-                  <div className="progress-bar"><div className="progress-fill" style={{ width: `${pct}%` }} /></div>
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginTop: 10, flexWrap: "wrap" }}>
+                  <div style={{ position: "relative", marginTop: 12 }}>
+                    <div style={{ position: "absolute", top: 17, left: 0, right: 0, height: 2, background: "rgba(255,255,255,0.08)" }} />
+                    <div
+                      style={{
+                        position: "absolute",
+                        top: 17,
+                        left: 0,
+                        height: 2,
+                        width: `${Math.max(12, pct)}%`,
+                        background: "linear-gradient(90deg, rgba(90,216,255,0.2), rgba(90,216,255,0.95), rgba(255,255,255,0.2))",
+                        boxShadow: "0 0 20px rgba(90,216,255,0.35)",
+                        transition: "width 0.5s ease",
+                        animation: scraping ? "dashboardShimmer 1.8s linear infinite" : "none",
+                      }}
+                    />
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(4,minmax(0,1fr))", gap: 12 }}>
+                      {stageOrder.map((stage, index) => {
+                        const active = stage === currentStage
+                        const reached = index <= currentStageIndex
+                        return (
+                          <div key={stage} style={{ position: "relative", textAlign: "center", zIndex: 1 }}>
+                            <div
+                              style={{
+                                width: 36,
+                                height: 36,
+                                margin: "0 auto 10px",
+                                borderRadius: 999,
+                                border: `1px solid ${active ? "rgba(90,216,255,0.95)" : reached ? "rgba(255,255,255,0.2)" : "var(--border)"}`,
+                                background: active
+                                  ? "radial-gradient(circle, rgba(90,216,255,0.28), rgba(90,216,255,0.06))"
+                                  : reached
+                                    ? "rgba(255,255,255,0.06)"
+                                    : "rgba(255,255,255,0.02)",
+                                display: "grid",
+                                placeItems: "center",
+                                boxShadow: active ? "0 0 24px rgba(90,216,255,0.28)" : "none",
+                                animation: active && scraping ? "dashboardPulseRing 1.8s ease-in-out infinite" : "none",
+                              }}
+                            >
+                              <span style={{ width: 10, height: 10, borderRadius: 999, background: active ? "var(--accent-cyan)" : reached ? "rgba(255,255,255,0.75)" : "rgba(255,255,255,0.18)" }} />
+                            </div>
+                            <div style={{ fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", color: active ? "var(--accent-cyan)" : reached ? "var(--text-primary)" : "var(--text-muted)" }}>
+                              {stageMeta[stage].label}
+                            </div>
+                            <div style={{ fontSize: 11, color: active ? "var(--text-secondary)" : "var(--text-muted)", marginTop: 4 }}>
+                              {stageMeta[stage].detail}
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginTop: 18, flexWrap: "wrap" }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                       {scraping && (
                         <div style={{ display: "inline-flex", gap: 5, alignItems: "center" }}>
@@ -1690,28 +1764,6 @@ export default function DashboardPage({ user, onLogout }) {
                       </div>
                     </div>
                     <div style={{ fontSize: 11, color: "var(--text-muted)", textAlign: "right" }}>{pct}% complete</div>
-                  </div>
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(4,minmax(0,1fr))", gap: 8, marginTop: 14 }}>
-                    {stageOrder.map((stage, index) => {
-                      const active = stage === currentStage
-                      const reached = index <= currentStageIndex
-                      return (
-                        <div
-                          key={stage}
-                          style={{
-                            border: `1px solid ${active ? "var(--accent-cyan)" : "var(--border)"}`,
-                            borderRadius: "var(--radius-sm)",
-                            padding: "10px 8px",
-                            background: reached ? "rgba(255,255,255,0.04)" : "transparent",
-                            textAlign: "center",
-                          }}
-                        >
-                          <div style={{ fontSize: 10, letterSpacing: "0.08em", textTransform: "uppercase", color: active ? "var(--accent-cyan)" : "var(--text-muted)" }}>
-                            {stageMeta[stage].label}
-                          </div>
-                        </div>
-                      )
-                    })}
                   </div>
                   {scraping && liveUrl.name && (
                     <div className="dashboard-live-url" style={{ marginTop: 10, padding: "10px 14px", background: "var(--bg-surface)", borderRadius: "var(--radius-sm)", fontSize: 12 }}>
