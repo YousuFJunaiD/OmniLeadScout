@@ -476,9 +476,6 @@ export default function DashboardPage({ user, onLogout }) {
   // ── v2 multi-platform config ──────────────────────────────
   const [queries, setQueries]           = useState(["dentist"])
   const [queryInput, setQueryInput]     = useState("")
-  const [enableMaps, setEnableMaps]     = useState(true)
-  const [enableJD, setEnableJD]         = useState(true)
-  const [enableIM, setEnableIM]         = useState(true)
   const [websiteFilter, setWebsiteFilter] = useState("minimal")
   const [maxPerQuery, setMaxPerQuery]   = useState(25)
   const [customCity, setCustomCity]     = useState("")
@@ -675,7 +672,6 @@ export default function DashboardPage({ user, onLogout }) {
   const allCountries = useMemo(() => Object.keys(WORLD).sort(), [])
   const activePlan = (usage?.plan || user?.plan || "starter").toLowerCase()
   const planLimits = usage?.limits || null
-  const isStarterPlan = activePlan === "starter"
   const allowedPlatforms = useMemo(() => {
     const allowed = new Set((planLimits?.platforms || []).map((value) => String(value || "").toLowerCase()))
     if ((user?.role || "user").toLowerCase() === "admin" || activePlan === "team") {
@@ -687,17 +683,19 @@ export default function DashboardPage({ user, onLogout }) {
       indiamart: allowed.has("web"),
     }
   }, [activePlan, planLimits?.platforms, user?.role])
+  const planSourceText = useMemo(() => {
+    if ((user?.role || "user").toLowerCase() === "admin" || activePlan === "team") {
+      return "Sources: Maps, JustDial, IndiaMART"
+    }
+    if (activePlan === "growth") return "Sources: Maps, JustDial, IndiaMART"
+    if (activePlan === "pro") return "Sources: JustDial, IndiaMART"
+    return "Sources: JustDial"
+  }, [activePlan, user?.role])
   const filteredCountries = useMemo(() => {
     const q = countrySearch.toLowerCase()
     return allCountries.filter(c => c.toLowerCase().includes(q))
   }, [allCountries, countrySearch])
   const cities = useMemo(() => (country ? Object.keys(WORLD[country]).sort() : []), [country])
-
-  useEffect(() => {
-    setEnableMaps(allowedPlatforms.maps)
-    setEnableJD(allowedPlatforms.justdial)
-    setEnableIM(allowedPlatforms.indiamart)
-  }, [allowedPlatforms])
 
   useEffect(() => {
     if (city && country) {
@@ -976,9 +974,9 @@ export default function DashboardPage({ user, onLogout }) {
     const finalCity    = customCity.trim() || city
     const finalQueries = queries.length ? queries : (customPro || profession ? [customPro || profession] : [])
     const requestedPlatforms = {
-      maps: allowedPlatforms.maps && enableMaps,
-      justdial: allowedPlatforms.justdial && enableJD,
-      indiamart: allowedPlatforms.indiamart && enableIM,
+      maps: allowedPlatforms.maps,
+      justdial: allowedPlatforms.justdial,
+      indiamart: allowedPlatforms.indiamart,
     }
     if (!finalQueries.length || !finalCity) return
     if (!requestedPlatforms.maps && !requestedPlatforms.justdial && !requestedPlatforms.indiamart) return
@@ -1312,7 +1310,8 @@ export default function DashboardPage({ user, onLogout }) {
   })
   const usageLimit = Number(planLimits?.leads || 0)
   const usageCount = usage?.leads_used_this_month || 0
-  const usagePct = usageLimit > 0 ? Math.min(100, Math.round((usageCount / usageLimit) * 100)) : 0
+  const usageUnlimited = !Number.isFinite(usageLimit) || usageLimit <= 0
+  const usagePct = !usageUnlimited ? Math.min(100, Math.round((usageCount / usageLimit) * 100)) : 0
   const usageWarning = usagePct >= 100 ? "hard" : usagePct >= 80 ? "soft" : "none"
 
   return (
@@ -1473,39 +1472,13 @@ export default function DashboardPage({ user, onLogout }) {
               <div className="card">
                 <p style={{ fontSize: 10, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--text-muted)", marginBottom: 14 }}>Platforms & Filters</p>
 
-                <label style={{ marginBottom: 8, display: "block" }}>Platforms</label>
-                <div className="dashboard-platform-grid" style={{ display: "flex", gap: 8, marginBottom: 16 }}>
-                  {[["Maps", enableMaps, setEnableMaps, "var(--accent-cyan)", !allowedPlatforms.maps],
-                    ["JustDial", enableJD, setEnableJD, "var(--accent-violet)", !allowedPlatforms.justdial],
-                    ["IndiaMart", enableIM, setEnableIM, "var(--accent-gold)", !allowedPlatforms.indiamart]].map(([label, on, setter, color, locked]) => (
-                    <button key={label} onClick={() => !locked && setter(v => !v)}
-                      disabled={locked}
-                      style={{ flex: 1, padding: "8px 4px", fontSize: 12, borderRadius: "var(--radius-md)", transition: "all 0.15s",
-                        border: `1px solid ${on ? color : "var(--border)"}`,
-                        background: on ? `${color}22` : "transparent",
-                        color: on ? color : "var(--text-muted)",
-                        fontFamily: "var(--font-display)", fontWeight: on ? 700 : 400,
-                        opacity: locked ? 0.45 : 1,
-                        cursor: locked ? "not-allowed" : "pointer" }}>
-                      {on ? "✓ " : ""}{label}
-                    </button>
-                  ))}
+                <label style={{ marginBottom: 8, display: "block" }}>Sources</label>
+                <div style={{ padding: "12px 14px", border: "1px solid var(--border)", borderRadius: "var(--radius-md)", background: "rgba(255,255,255,0.02)", marginBottom: 16 }}>
+                  <div style={{ color: "var(--text-primary)", fontWeight: 600, marginBottom: 4 }}>{planSourceText}</div>
+                  <div style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                    Source access is controlled automatically by your plan.
+                  </div>
                 </div>
-                {isStarterPlan && (
-                  <p style={{ fontSize: 11, color: "var(--text-muted)", marginTop: -8, marginBottom: 12 }}>
-                    Starter plan includes Google Maps only.
-                  </p>
-                )}
-                {activePlan === "pro" && (
-                  <p style={{ fontSize: 11, color: "var(--text-muted)", marginTop: -8, marginBottom: 12 }}>
-                    Pro plan includes JustDial and IndiaMART only.
-                  </p>
-                )}
-                {activePlan === "growth" && (
-                  <p style={{ fontSize: 11, color: "var(--text-muted)", marginTop: -8, marginBottom: 12 }}>
-                    Growth plan includes Maps, JustDial, and IndiaMART.
-                  </p>
-                )}
 
                 <label style={{ marginBottom: 6, display: "block" }}>Website Filter</label>
                 <select value={websiteFilter} onChange={e => setWebsiteFilter(e.target.value)} style={{ marginBottom: 16 }}>
@@ -1527,7 +1500,7 @@ export default function DashboardPage({ user, onLogout }) {
                 {!scraping ? (
                   <button className="btn btn-primary" style={{ width: "100%", padding: 14, fontSize: 14, justifyContent: "center" }}
                     onClick={startScrape}
-                    disabled={!queries.length || !(customCity.trim() || city) || (!enableMaps && !enableJD && !enableIM) || usagePct >= 100}>
+                    disabled={!queries.length || !(customCity.trim() || city) || usagePct >= 100}>
                     Launch scraper →
                   </button>
                 ) : (
@@ -1565,8 +1538,8 @@ export default function DashboardPage({ user, onLogout }) {
                   <div className="dashboard-section-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, gap: 16, flexWrap: "wrap" }}>
                     <div>
                       <div style={{ fontSize: 14, fontWeight: 700 }}>
-                        Leads this month: {usageCount} / {usageLimit}{" "}
-                        {usageWarning !== "none" && (
+                        {usageUnlimited ? "Unlimited leads" : `${usageCount} / ${usageLimit} leads used this month`}{" "}
+                        {!usageUnlimited && usageWarning !== "none" && (
                           <span style={{ color: usageWarning === "hard" ? "var(--accent-red)" : "var(--accent-gold)" }}>
                             — {usageWarning === "hard" ? "Upgrade to Pro" : "Upgrade soon"}
                           </span>
@@ -1581,15 +1554,17 @@ export default function DashboardPage({ user, onLogout }) {
                       Upgrade
                     </button>
                   </div>
-                  <div className="progress-bar">
-                    <div
-                      className="progress-fill"
-                      style={{
-                        width: `${usagePct}%`,
-                        background: usageWarning === "hard" ? "rgba(255,100,100,0.9)" : usageWarning === "soft" ? "rgba(255,255,255,0.7)" : "#FFFFFF",
-                      }}
-                    />
-                  </div>
+                  {!usageUnlimited && (
+                    <div className="progress-bar">
+                      <div
+                        className="progress-fill"
+                        style={{
+                          width: `${usagePct}%`,
+                          background: usageWarning === "hard" ? "rgba(255,100,100,0.9)" : usageWarning === "soft" ? "rgba(255,255,255,0.7)" : "#FFFFFF",
+                        }}
+                      />
+                    </div>
+                  )}
                 </div>
               )}
 

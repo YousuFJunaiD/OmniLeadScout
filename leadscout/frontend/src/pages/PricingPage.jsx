@@ -19,7 +19,7 @@ const PLANS = [
     features: [
       { text: "100 leads / month",        ok: true  },
       { text: "3 searches / day",          ok: true  },
-      { text: "Google Maps only",          ok: true  },
+      { text: "JustDial only",             ok: true  },
       { text: "CSV export",                ok: true  },
       { text: "Community support",         ok: true  },
       { text: "7-day data retention",      ok: true  },
@@ -68,7 +68,7 @@ const PLANS = [
     features: [
       { text: "10,000 leads / month",                    ok: true },
       { text: "Unlimited searches",                       ok: true },
-      { text: "Google Maps + JustDial + IndiaMart",       ok: true },
+      { text: "Maps + JustDial + IndiaMART",              ok: true },
       { text: "Full phone numbers (88%+ verified)",       ok: true },
       { text: "AI lead scoring",                          ok: true },
       { text: "Scheduled scraping",                       ok: true },
