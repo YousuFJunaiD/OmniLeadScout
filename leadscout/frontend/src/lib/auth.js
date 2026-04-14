@@ -2,6 +2,7 @@ import { apiUrl, getApiHeaders } from "./api"
 
 const TOKEN_KEY = "ls_token"
 const USER_KEY = "ls_user"
+const FORCED_LOGOUT_KEY = "ls_forced_logout_message"
 
 function getStorage() {
   if (typeof window === "undefined") return null
@@ -79,6 +80,36 @@ export function clearAuth() {
   }
 }
 
+export function setForcedLogoutMessage(message) {
+  if (typeof window === "undefined") return
+  if (message) {
+    window.sessionStorage.setItem(FORCED_LOGOUT_KEY, message)
+  } else {
+    window.sessionStorage.removeItem(FORCED_LOGOUT_KEY)
+  }
+}
+
+export function consumeForcedLogoutMessage() {
+  if (typeof window === "undefined") return ""
+  const message = window.sessionStorage.getItem(FORCED_LOGOUT_KEY) || ""
+  window.sessionStorage.removeItem(FORCED_LOGOUT_KEY)
+  return message
+}
+
+async function readUnauthorizedMessage(response) {
+  try {
+    const clone = response.clone()
+    const contentType = clone.headers.get("content-type") || ""
+    if (contentType.includes("application/json")) {
+      const data = await clone.json()
+      return data?.detail || data?.error || data?.message || ""
+    }
+    return await clone.text()
+  } catch {
+    return ""
+  }
+}
+
 export function canDownloadCsv(user) {
   const role = String(user?.role || "user").trim().toLowerCase()
   if (role === "admin") return true
@@ -106,6 +137,10 @@ export async function tryRefreshToken() {
     headers: getAuthHeaders(),
   })
   if (!response.ok) {
+    const message = await readUnauthorizedMessage(response)
+    if (String(message).toLowerCase().includes("another device") || String(message).toLowerCase().includes("session invalid")) {
+      setForcedLogoutMessage("You were signed out because your account was used on another device.")
+    }
     clearAuth()
     return null
   }
@@ -121,8 +156,12 @@ export async function authFetch(url, options = {}, onUnauthorized) {
   const headers = getAuthHeaders(options.headers || {})
   const response = await fetch(apiUrl(url), { ...options, headers })
   if (response.status === 401) {
+    const message = await readUnauthorizedMessage(response)
+    if (String(message).toLowerCase().includes("another device") || String(message).toLowerCase().includes("session invalid")) {
+      setForcedLogoutMessage("You were signed out because your account was used on another device.")
+    }
     clearAuth()
-    if (onUnauthorized) onUnauthorized()
+    if (onUnauthorized) onUnauthorized(message)
   }
   return response
 }

@@ -10,12 +10,13 @@ import ProfilePage from "./pages/ProfilePage"
 import ResetPasswordPage from "./pages/ResetPasswordPage"
 import SignupPage from "./pages/SignupPage"
 import PricingPage from "./pages/PricingPage"
-import { clearAuth, getStoredUser, getToken, isTokenExpired, setStoredUser, setToken, tryRefreshToken } from "./lib/auth"
+import { clearAuth, consumeForcedLogoutMessage, getStoredUser, getToken, isTokenExpired, setForcedLogoutMessage, setStoredUser, setToken, tryRefreshToken } from "./lib/auth"
 import { apiUrl, getApiHeaders } from "./lib/api"
 
 export default function App() {
   const [user, setUser] = useState(null)
   const [authReady, setAuthReady] = useState(false)
+  const [forcedLogoutMessage, setForcedLogoutMessage] = useState("")
 
   const syncAdminEmail = (email) => {
     if (typeof window === "undefined") return
@@ -25,6 +26,11 @@ export default function App() {
       window.localStorage.removeItem("user_email")
     }
   }
+
+  useEffect(() => {
+    const message = consumeForcedLogoutMessage()
+    if (message) setForcedLogoutMessage(message)
+  }, [])
 
   useEffect(() => {
     const token = getToken()
@@ -52,7 +58,16 @@ export default function App() {
       headers: getApiHeaders({ Authorization: `Bearer ${token}` }),
     })
       .then(async (res) => {
-        if (!res.ok) throw new Error("unauthorized")
+        if (!res.ok) {
+          try {
+            const payload = await res.json()
+            const message = payload?.detail || payload?.error || payload?.message || ""
+            if (String(message).toLowerCase().includes("another device") || String(message).toLowerCase().includes("session invalid")) {
+              setForcedLogoutMessage("You were signed out because your account was used on another device.")
+            }
+          } catch {}
+          throw new Error("unauthorized")
+        }
         const data = await res.json()
         setStoredUser(data.user)
         setUser(data.user)
@@ -60,6 +75,8 @@ export default function App() {
         setAuthReady(true)
       })
       .catch(() => {
+        const message = consumeForcedLogoutMessage()
+        if (message) setForcedLogoutMessage(message)
         clearAuth()
         setUser(null)
         syncAdminEmail("")
@@ -84,6 +101,7 @@ export default function App() {
   }, [user])
 
   const login = ({ token, user: userData }) => {
+    setForcedLogoutMessage("")
     setToken(token)
     setStoredUser(userData)
     setUser(userData)
@@ -91,6 +109,7 @@ export default function App() {
   }
 
   const logout = () => {
+    setForcedLogoutMessage("")
     clearAuth()
     setUser(null)
   }
@@ -117,7 +136,7 @@ export default function App() {
     <Router>
       <Routes>
         <Route path="/" element={<HomePage />} />
-        <Route path="/login"    element={<LoginPage  onLogin={login} />} />
+        <Route path="/login"    element={<LoginPage  onLogin={login} forcedLogoutMessage={forcedLogoutMessage} onForcedLogoutMessageShown={() => setForcedLogoutMessage("")} />} />
         <Route path="/reset-password" element={<ResetPasswordPage />} />
         <Route path="/signup"   element={<SignupPage onLogin={login} />} />
         <Route path="/pricing"  element={<PricingPage user={user} onPlanSelected={updateUser} />} />

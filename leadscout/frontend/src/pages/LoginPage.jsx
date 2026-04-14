@@ -1,5 +1,5 @@
 import React from "react";
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { Link, useNavigate } from "react-router-dom"
 import SparklesBg from "../components/SparklesBg"
 import { apiUrl, getApiHeaders } from "../lib/api"
@@ -13,13 +13,20 @@ const toReadableError = (value, fallback = "Something went wrong") => {
   return fallback
 }
 
-export default function LoginPage({ onLogin }) {
+export default function LoginPage({ onLogin, forcedLogoutMessage = "", onForcedLogoutMessageShown }) {
   const [mode, setMode]     = useState("login")
   const [form, setForm]     = useState({ name: "", email: "", password: "" })
   const [error, setError]   = useState("")
   const [loading, setLoading] = useState(false)
   const [showPassword, setShowPassword] = useState(false)
   const navigate = useNavigate()
+
+  useEffect(() => {
+    if (forcedLogoutMessage) {
+      setError(forcedLogoutMessage)
+      if (onForcedLogoutMessageShown) onForcedLogoutMessageShown()
+    }
+  }, [forcedLogoutMessage, onForcedLogoutMessageShown])
 
   const parseAuthPayload = (payload) => ({
     token: payload?.token || payload?.data?.token || null,
