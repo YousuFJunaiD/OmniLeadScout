@@ -1675,6 +1675,7 @@ export default function DashboardPage({ user, onLogout }) {
                             unreachable: "var(--text-muted)",
                           }[lead.website_status] || "var(--text-muted)"
                           const srcColor = {
+                            maps: "var(--accent-cyan)",
                             google_maps: "var(--accent-cyan)",
                             justdial: "var(--accent-violet)",
                             indiamart: "var(--accent-gold)",
@@ -1730,6 +1731,7 @@ export default function DashboardPage({ user, onLogout }) {
                             unreachable: "var(--text-muted)",
                           }[lead.website_status] || "var(--text-muted)"
                           const srcColor = {
+                            maps: "var(--accent-cyan)",
                             google_maps: "var(--accent-cyan)",
                             justdial:    "var(--accent-violet)",
                             indiamart:   "var(--accent-gold)",
