@@ -570,19 +570,25 @@ export default function DashboardPage({ user, onLogout }) {
     return "Source access: 1 source included"
   }
 
+  const getAreaSelectionLimit = () => {
+    if ((user?.role || "user").toLowerCase() === "admin" || activePlan === "team" || activePlan === "growth") return Infinity
+    if (activePlan === "pro") return 3
+    return 1
+  }
+
   const stageOrder = ["searching", "expanding", "filtering", "finalizing"]
   const stageMeta = {
-    searching: { label: "Searching", detail: "Searching selected area" },
-    expanding: { label: "Expanding", detail: "Expanding coverage" },
-    filtering: { label: "Filtering", detail: "Filtering strongest leads" },
+    searching: { label: "Searching", detail: "Searching your selected area" },
+    expanding: { label: "Expanding", detail: "Expanding search to nearby locations" },
+    filtering: { label: "Filtering", detail: "Broadening search for better results" },
     finalizing: { label: "Finalizing", detail: "Finalizing results" },
   }
 
   const getStageFromText = (value = "") => {
     const lower = String(value || "").toLowerCase()
     if (!lower) return "searching"
-    if (lower.includes("expand") || lower.includes("nearby") || lower.includes("broaden")) return "expanding"
-    if (lower.includes("filter") || lower.includes("process")) return "filtering"
+    if (lower.includes("expand") || lower.includes("nearby")) return "expanding"
+    if (lower.includes("filter") || lower.includes("process") || lower.includes("broaden")) return "filtering"
     if (lower.includes("final") || lower.includes("saving") || lower.includes("complete")) return "finalizing"
     return "searching"
   }
@@ -610,13 +616,14 @@ export default function DashboardPage({ user, onLogout }) {
       return ""
     }
     if (lower.includes("searching sources")) return "Starting search"
-    if (lower.includes("processing results")) return "Filtering strongest leads"
+    if (lower.includes("processing results")) return "Broadening search for better results"
     if (lower.includes("saving leads")) return "Finalizing results"
-    if (lower.includes("expanding") || lower.includes("nearby") || lower.includes("broaden")) return "Expanding coverage"
-    if (lower.includes("selected area")) return "Searching selected area"
+    if (lower.includes("expanding") || lower.includes("nearby")) return "Expanding search to nearby locations"
+    if (lower.includes("broaden")) return "Broadening search for better results"
+    if (lower.includes("selected area")) return "Searching your selected area"
     if (lower.includes("source issue") || lower.includes("source blocked") || lower.includes("retry") || lower.includes("blocked")) return "Expanding"
     if (lower.includes("no data found")) return "Search completed with no matching leads"
-    if (lower.includes("fetching") || lower.includes("listing page") || lower.includes("waiting for results")) return "Searching selected area"
+    if (lower.includes("fetching") || lower.includes("listing page") || lower.includes("waiting for results")) return "Searching your selected area"
     if (lower.includes("scrape finished") || lower.includes("saving leads complete")) return "Finalizing"
     return text
   }
@@ -760,6 +767,7 @@ export default function DashboardPage({ user, onLogout }) {
     }
   }, [activePlan, planLimits?.platforms, user?.role])
   const planSourceText = useMemo(() => getSourceAccessText(), [activePlan, user?.role])
+  const areaSelectionLimit = useMemo(() => getAreaSelectionLimit(), [activePlan, user?.role])
   const filteredCountries = useMemo(() => {
     const q = countrySearch.toLowerCase()
     return allCountries.filter(c => c.toLowerCase().includes(q))
@@ -769,9 +777,14 @@ export default function DashboardPage({ user, onLogout }) {
   useEffect(() => {
     if (city && country) {
       const a = WORLD[country][city] || []
-      setAreas(a); setSelAreas([...a])
+      setAreas(a); setSelAreas([])
     }
   }, [city, country])
+
+  useEffect(() => {
+    if (!Number.isFinite(areaSelectionLimit)) return
+    setSelAreas((prev) => prev.slice(0, areaSelectionLimit))
+  }, [areaSelectionLimit])
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -783,7 +796,11 @@ export default function DashboardPage({ user, onLogout }) {
     return () => document.removeEventListener("mousedown", handle)
   }, [])
 
-  const toggle = (a) => setSelAreas(p => p.includes(a) ? p.filter(x => x !== a) : [...p, a])
+  const toggle = (a) => setSelAreas((prev) => {
+    if (prev.includes(a)) return prev.filter((x) => x !== a)
+    if (Number.isFinite(areaSelectionLimit) && prev.length >= areaSelectionLimit) return prev
+    return [...prev, a]
+  })
 
   const buildNiche = () => {
     const finalPro = customPro || profession || "custom"
@@ -1023,7 +1040,11 @@ export default function DashboardPage({ user, onLogout }) {
     newAreas.forEach(a => {
       if (!areas.includes(a)) {
         setAreas(p => [...p, a])
-        setSelAreas(p => [...p, a])
+        setSelAreas((prev) => {
+          if (prev.includes(a)) return prev
+          if (Number.isFinite(areaSelectionLimit) && prev.length >= areaSelectionLimit) return prev
+          return [...prev, a]
+        })
       }
     })
     setNewArea("")
@@ -1038,6 +1059,7 @@ export default function DashboardPage({ user, onLogout }) {
     if (scraping) return
     const finalCity    = customCity.trim() || city
     const finalQueries = queries.length ? queries : (customPro || profession ? [customPro || profession] : [])
+    const selectedAreas = Number.isFinite(areaSelectionLimit) ? selAreas.slice(0, areaSelectionLimit) : selAreas
     const requestedPlatforms = {
       maps: allowedPlatforms.maps,
       justdial: allowedPlatforms.justdial,
@@ -1065,7 +1087,7 @@ export default function DashboardPage({ user, onLogout }) {
           niche:           `${finalQueries[0]}_${finalCity}`.replace(/ /g, "_").toLowerCase(),
           city:            finalCity,
           queries:         finalQueries,
-          areas:           selAreas.length ? selAreas : [],
+          areas:           selectedAreas.length ? selectedAreas : [],
           enable_maps:     requestedPlatforms.maps,
           enable_justdial: requestedPlatforms.justdial,
           enable_indiamart: requestedPlatforms.indiamart,
@@ -1239,7 +1261,7 @@ export default function DashboardPage({ user, onLogout }) {
                 return Array.from(unique)
               })
             }
-            setSelAreas([status.location])
+            setSelAreas((prev) => (prev.length ? prev : [status.location].slice(0, Number.isFinite(areaSelectionLimit) ? areaSelectionLimit : 1)))
           }
           attachSocket(savedJobId, { reset: true })
         } else {
@@ -1475,22 +1497,25 @@ export default function DashboardPage({ user, onLogout }) {
                 {areas.length > 0 && (
                   <div style={{ marginBottom: 14 }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                      <label style={{ margin: 0 }}>Areas ({selAreas.length}/{areas.length})</label>
+                      <label style={{ margin: 0 }}>Areas ({selAreas.length}{Number.isFinite(areaSelectionLimit) ? `/${areaSelectionLimit}` : ""} selected)</label>
                       <div style={{ display: "flex", gap: 6 }}>
-                        <button className="btn btn-ghost" style={{ padding: "3px 10px", fontSize: 11 }} onClick={() => setSelAreas([...areas])}>All</button>
+                        <button className="btn btn-ghost" style={{ padding: "3px 10px", fontSize: 11 }} onClick={() => setSelAreas(Number.isFinite(areaSelectionLimit) ? areas.slice(0, areaSelectionLimit) : [...areas])}>Top</button>
                         <button className="btn btn-ghost" style={{ padding: "3px 10px", fontSize: 11 }} onClick={() => setSelAreas([])}>None</button>
                       </div>
                     </div>
                     <div style={{ display: "flex", flexWrap: "wrap", gap: 6, maxHeight: 200, overflowY: "auto", padding: "4px 0" }}>
                       {areas.map(a => (
                         <div key={a} style={{ display: "flex", alignItems: "center", gap: 2 }}>
-                          <button onClick={() => toggle(a)} style={chipStyle(selAreas.includes(a))}>{a}</button>
+                          <button onClick={() => toggle(a)} disabled={!selAreas.includes(a) && Number.isFinite(areaSelectionLimit) && selAreas.length >= areaSelectionLimit} style={{ ...chipStyle(selAreas.includes(a)), opacity: !selAreas.includes(a) && Number.isFinite(areaSelectionLimit) && selAreas.length >= areaSelectionLimit ? 0.45 : 1 }}>{a}</button>
                           <button onClick={() => removeArea(a)}
                             style={{ background: "none", border: "none", color: "var(--text-muted)", cursor: "pointer", fontSize: 14, padding: "0 2px", lineHeight: 1 }}
                             title="Remove area">×</button>
                         </div>
                       ))}
                     </div>
+                    <p style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 8 }}>
+                      {Number.isFinite(areaSelectionLimit) ? `Your plan supports up to ${areaSelectionLimit} selected area${areaSelectionLimit > 1 ? "s" : ""}.` : "Your plan supports unlimited selected areas."}
+                    </p>
                   </div>
                 )}
 
@@ -1791,30 +1816,47 @@ export default function DashboardPage({ user, onLogout }) {
                   {stats.total > 0 && <span style={{ fontSize: 11, color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>{stats.total} collected</span>}
                 </div>
                 <div ref={tableRef} style={{ maxHeight: 480, overflowY: "auto" }}>
-                  {leads.length === 0 && feedMessages.length > 0 ? (
-                    <div style={{ padding: "18px 20px", display: "flex", flexDirection: "column", gap: 10 }}>
-                      {feedMessages.map((message) => (
-                        <div
-                          key={message.id}
-                          style={{
-                            fontSize: 12,
-                            color: "var(--text-secondary)",
-                            border: "1px solid var(--border)",
-                            borderRadius: "var(--radius-sm)",
-                            padding: "12px 14px",
-                            background: "rgba(255,255,255,0.02)",
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "space-between",
-                            gap: 10,
-                          }}
-                        >
-                          <span>{message.text}</span>
-                          <span style={{ fontSize: 10, color: "var(--text-muted)", letterSpacing: "0.08em", textTransform: "uppercase" }}>
-                            {stageMeta[getStageFromText(message.text)]?.label || "Update"}
-                          </span>
+                  {leads.length === 0 && (scraping || runtimeStatus) ? (
+                    <div style={{ padding: "26px 20px" }}>
+                      <div
+                        style={{
+                          border: "1px solid var(--border)",
+                          borderRadius: "var(--radius-md)",
+                          padding: "18px 18px 16px",
+                          background: "linear-gradient(135deg, rgba(90,216,255,0.08), rgba(255,255,255,0.02))",
+                          boxShadow: currentStage ? "0 0 28px rgba(90,216,255,0.08)" : "none",
+                        }}
+                      >
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16 }}>
+                          <div>
+                            <div style={{ fontSize: 11, letterSpacing: "0.12em", textTransform: "uppercase", color: "var(--accent-cyan)", marginBottom: 8 }}>
+                              {stageMeta[currentStage]?.label || "Searching"}
+                            </div>
+                            <div style={{ fontSize: 18, fontWeight: 700, color: "var(--text-primary)" }}>
+                              {sanitizeFeedMessage(runtimeStatus || feedMessages[0]?.text || stageMeta[currentStage]?.detail || "Searching your selected area", stageMeta[currentStage]?.detail || "Searching your selected area")}
+                            </div>
+                          </div>
+                          {scraping && (
+                            <div style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+                              <span style={{ width: 10, height: 10, borderRadius: 999, background: "var(--accent-cyan)", animation: "dashboardPulse 1s ease-in-out infinite" }} />
+                              <span style={{ width: 10, height: 10, borderRadius: 999, background: "var(--accent-cyan)", opacity: 0.7, animation: "dashboardPulse 1s ease-in-out .18s infinite" }} />
+                              <span style={{ width: 10, height: 10, borderRadius: 999, background: "var(--accent-cyan)", opacity: 0.45, animation: "dashboardPulse 1s ease-in-out .36s infinite" }} />
+                            </div>
+                          )}
                         </div>
-                      ))}
+                        <div style={{ marginTop: 16, height: 6, borderRadius: 999, overflow: "hidden", background: "rgba(255,255,255,0.06)" }}>
+                          <div
+                            style={{
+                              width: `${Math.max(14, pct)}%`,
+                              height: "100%",
+                              borderRadius: 999,
+                              background: "linear-gradient(90deg, rgba(90,216,255,0.18), rgba(90,216,255,0.95), rgba(255,255,255,0.22))",
+                              animation: scraping ? "dashboardShimmer 1.6s linear infinite" : "none",
+                              transition: "width 0.45s ease",
+                            }}
+                          />
+                        </div>
+                      </div>
                     </div>
                   ) : leads.length === 0 ? (
                     <div style={{ padding: "60px 20px", textAlign: "center" }}>
