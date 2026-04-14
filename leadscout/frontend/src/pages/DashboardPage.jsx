@@ -676,6 +676,17 @@ export default function DashboardPage({ user, onLogout }) {
   const activePlan = (usage?.plan || user?.plan || "starter").toLowerCase()
   const planLimits = usage?.limits || null
   const isStarterPlan = activePlan === "starter"
+  const allowedPlatforms = useMemo(() => {
+    const allowed = new Set((planLimits?.platforms || []).map((value) => String(value || "").toLowerCase()))
+    if ((user?.role || "user").toLowerCase() === "admin" || activePlan === "team") {
+      return { maps: true, justdial: true, indiamart: true }
+    }
+    return {
+      maps: allowed.has("google_maps"),
+      justdial: allowed.has("justdial"),
+      indiamart: allowed.has("web"),
+    }
+  }, [activePlan, planLimits?.platforms, user?.role])
   const filteredCountries = useMemo(() => {
     const q = countrySearch.toLowerCase()
     return allCountries.filter(c => c.toLowerCase().includes(q))
@@ -683,11 +694,10 @@ export default function DashboardPage({ user, onLogout }) {
   const cities = useMemo(() => (country ? Object.keys(WORLD[country]).sort() : []), [country])
 
   useEffect(() => {
-    if (!isStarterPlan) return
-    setEnableMaps(true)
-    setEnableJD(false)
-    setEnableIM(false)
-  }, [isStarterPlan])
+    setEnableMaps(allowedPlatforms.maps)
+    setEnableJD(allowedPlatforms.justdial)
+    setEnableIM(allowedPlatforms.indiamart)
+  }, [allowedPlatforms])
 
   useEffect(() => {
     if (city && country) {
@@ -965,9 +975,11 @@ export default function DashboardPage({ user, onLogout }) {
     if (scraping) return
     const finalCity    = customCity.trim() || city
     const finalQueries = queries.length ? queries : (customPro || profession ? [customPro || profession] : [])
-    const requestedPlatforms = isStarterPlan
-      ? { maps: true, justdial: false, indiamart: false }
-      : { maps: enableMaps, justdial: enableJD, indiamart: enableIM }
+    const requestedPlatforms = {
+      maps: allowedPlatforms.maps && enableMaps,
+      justdial: allowedPlatforms.justdial && enableJD,
+      indiamart: allowedPlatforms.indiamart && enableIM,
+    }
     if (!finalQueries.length || !finalCity) return
     if (!requestedPlatforms.maps && !requestedPlatforms.justdial && !requestedPlatforms.indiamart) return
 
@@ -1463,9 +1475,9 @@ export default function DashboardPage({ user, onLogout }) {
 
                 <label style={{ marginBottom: 8, display: "block" }}>Platforms</label>
                 <div className="dashboard-platform-grid" style={{ display: "flex", gap: 8, marginBottom: 16 }}>
-                  {[["Maps", enableMaps, setEnableMaps, "var(--accent-cyan)", false],
-                    ["JustDial", enableJD, setEnableJD, "var(--accent-violet)", isStarterPlan],
-                    ["IndiaMart", enableIM, setEnableIM, "var(--accent-gold)", isStarterPlan]].map(([label, on, setter, color, locked]) => (
+                  {[["Maps", enableMaps, setEnableMaps, "var(--accent-cyan)", !allowedPlatforms.maps],
+                    ["JustDial", enableJD, setEnableJD, "var(--accent-violet)", !allowedPlatforms.justdial],
+                    ["IndiaMart", enableIM, setEnableIM, "var(--accent-gold)", !allowedPlatforms.indiamart]].map(([label, on, setter, color, locked]) => (
                     <button key={label} onClick={() => !locked && setter(v => !v)}
                       disabled={locked}
                       style={{ flex: 1, padding: "8px 4px", fontSize: 12, borderRadius: "var(--radius-md)", transition: "all 0.15s",
@@ -1482,6 +1494,16 @@ export default function DashboardPage({ user, onLogout }) {
                 {isStarterPlan && (
                   <p style={{ fontSize: 11, color: "var(--text-muted)", marginTop: -8, marginBottom: 12 }}>
                     Starter plan includes Google Maps only.
+                  </p>
+                )}
+                {activePlan === "pro" && (
+                  <p style={{ fontSize: 11, color: "var(--text-muted)", marginTop: -8, marginBottom: 12 }}>
+                    Pro plan includes JustDial and IndiaMART only.
+                  </p>
+                )}
+                {activePlan === "growth" && (
+                  <p style={{ fontSize: 11, color: "var(--text-muted)", marginTop: -8, marginBottom: 12 }}>
+                    Growth plan includes Maps, JustDial, and IndiaMART.
                   </p>
                 )}
 
@@ -1505,7 +1527,7 @@ export default function DashboardPage({ user, onLogout }) {
                 {!scraping ? (
                   <button className="btn btn-primary" style={{ width: "100%", padding: 14, fontSize: 14, justifyContent: "center" }}
                     onClick={startScrape}
-                    disabled={!queries.length || !(customCity.trim() || city) || (isStarterPlan ? false : (!enableMaps && !enableJD && !enableIM)) || usagePct >= 100}>
+                    disabled={!queries.length || !(customCity.trim() || city) || (!enableMaps && !enableJD && !enableIM) || usagePct >= 100}>
                     Launch scraper →
                   </button>
                 ) : (
