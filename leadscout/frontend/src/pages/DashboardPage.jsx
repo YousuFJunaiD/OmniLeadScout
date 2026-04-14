@@ -550,6 +550,41 @@ export default function DashboardPage({ user, onLogout }) {
     return fallback
   }
 
+  const getSourceAccessText = () => {
+    if ((user?.role || "user").toLowerCase() === "admin" || activePlan === "team") return "Source access: 3 sources included"
+    if (activePlan === "growth") return "Source access: 3 sources included"
+    if (activePlan === "pro") return "Source access: 2 sources included"
+    return "Source access: 1 source included"
+  }
+
+  const sanitizeFeedMessage = (value, fallback = "Starting search") => {
+    const text = toFeedText(value, fallback).trim()
+    if (!text) return fallback
+    const lower = text.toLowerCase()
+    if (lower.includes("browsertype.launch") || lower.includes("playwright") || lower.includes("traceback") || lower.includes("stack trace")) {
+      return "Source temporarily unavailable, trying next route"
+    }
+    if (lower.includes("debug artifacts") || lower.includes("score=") || lower.includes("selected high_quality") || lower.includes("fallback-kept")) {
+      return ""
+    }
+    if (lower.includes("searching sources")) return "Starting search"
+    if (lower.includes("processing results")) return "Processing results"
+    if (lower.includes("saving leads")) return "Finalizing leads"
+    if (lower.includes("source issue") || lower.includes("source blocked") || lower.includes("retry") || lower.includes("blocked")) {
+      return "Source temporarily unavailable, trying next route"
+    }
+    if (lower.includes("no data found")) return "Search completed with no matching leads"
+    if (lower.includes("fetching") || lower.includes("listing page") || lower.includes("waiting for results")) {
+      return "Source in progress"
+    }
+    if (lower.includes("scrape finished") || lower.includes("saving leads complete")) return "Completed"
+    if (/\[\w+/.test(text) || lower.includes("justdial") || lower.includes("indiamart") || lower.includes("google maps") || lower.includes("maps")) {
+      if (lower.includes("leads for")) return "Source in progress"
+      return "Starting search"
+    }
+    return text
+  }
+
   const getStatusBadgeClass = (status) => {
     if (status === "completed") return "badge-green"
     if (status === "running") return "badge-cyan"
@@ -577,7 +612,7 @@ export default function DashboardPage({ user, onLogout }) {
   }
 
   const pushFeedMessage = (text, tone = "info") => {
-    const message = toFeedText(text, "").trim()
+    const message = sanitizeFeedMessage(text, "").trim()
     if (!message) return
     const key = `${tone}:${message}`
     if (seenMessageKeysRef.current.has(key)) return
@@ -590,12 +625,12 @@ export default function DashboardPage({ user, onLogout }) {
     setProgress((prev) => ({
       current: Number(status.processed_areas ?? prev.current ?? 0),
       total: Number(status.total_areas ?? prev.total ?? 0),
-      query: status.current_query || prev.query || "",
+      query: "",
     }))
     setRuntimeStatus(
       getStatusMessage(
         status.status,
-        status.progress_message || status.current_query || (status.status === "pending" ? "Queued for worker…" : "")
+        sanitizeFeedMessage(status.progress_message || status.current_query || (status.status === "pending" ? "Queued for worker…" : ""), "")
       )
     )
     if (typeof status.lead_count === "number") {
@@ -610,12 +645,12 @@ export default function DashboardPage({ user, onLogout }) {
         queueLeadForUi(event.data)
       } else if (type === "progress") {
         const data = event.data || {}
-        pushFeedMessage(`Progress ${data.current || 0}/${data.total || 0}${data.query ? ` • ${data.query}` : ""}`)
+        pushFeedMessage(`Progress ${data.current || 0}/${data.total || 0}`)
       } else if (type === "error") {
-        pushFeedMessage(event.data || "Scrape failed", "error")
+        pushFeedMessage(event.data || "Source temporarily unavailable, trying next route", "error")
       } else if (type === "block_wait") {
         const data = event.data || {}
-        pushFeedMessage(`Blocked, retrying in ${data.wait_seconds || 0}s`, "warn")
+        pushFeedMessage("Source temporarily unavailable, trying next route", "warn")
       } else {
         pushFeedMessage(event?.data ?? type)
       }
@@ -683,14 +718,7 @@ export default function DashboardPage({ user, onLogout }) {
       indiamart: allowed.has("web"),
     }
   }, [activePlan, planLimits?.platforms, user?.role])
-  const planSourceText = useMemo(() => {
-    if ((user?.role || "user").toLowerCase() === "admin" || activePlan === "team") {
-      return "Sources: Maps, JustDial, IndiaMART"
-    }
-    if (activePlan === "growth") return "Sources: Maps, JustDial, IndiaMART"
-    if (activePlan === "pro") return "Sources: JustDial, IndiaMART"
-    return "Sources: JustDial"
-  }, [activePlan, user?.role])
+  const planSourceText = useMemo(() => getSourceAccessText(), [activePlan, user?.role])
   const filteredCountries = useMemo(() => {
     const q = countrySearch.toLowerCase()
     return allCountries.filter(c => c.toLowerCase().includes(q))
@@ -862,19 +890,15 @@ export default function DashboardPage({ user, onLogout }) {
       } else if (msg.type === "url") {
         setLiveUrl(msg.data || { maps_url: "", website_url: "", name: "" })
       } else if (msg.type === "progress") {
-        setProgress(msg.data)
-        pushFeedMessage(`Progress ${msg.data?.current || 0}/${msg.data?.total || 0}${msg.data?.query ? ` • ${msg.data.query}` : ""}`)
+        setProgress((prev) => ({ ...prev, ...(msg.data || {}), query: "" }))
+        pushFeedMessage(`Progress ${msg.data?.current || 0}/${msg.data?.total || 0}`)
       } else if (msg.type === "info") {
-        const text = toFeedText(msg.data, "")
+        const text = sanitizeFeedMessage(msg.data, "")
         setRuntimeStatus(text)
         pushFeedMessage(text)
       } else if (msg.type === "block_wait") {
-        const d = msg.data || {}
-        const wait = Number(d.wait_seconds || 0)
-        const attempt = Number(d.retry_attempt || 0)
-        const limit = Number(d.retry_limit || 0)
-        setRuntimeStatus(`Blocked by Google. Waiting ${wait}s (attempt ${attempt}/${limit}) then auto-resuming...`)
-        pushFeedMessage(`Blocked by Google. Waiting ${wait}s (attempt ${attempt}/${limit})`, "warn")
+        setRuntimeStatus("Source temporarily unavailable, trying next route")
+        pushFeedMessage("Source temporarily unavailable, trying next route", "warn")
       } else if (msg.type === "done") {
         flushLiveFeed()
         keepSocketAliveRef.current = false
@@ -895,7 +919,7 @@ export default function DashboardPage({ user, onLogout }) {
         flushLiveFeed()
         keepSocketAliveRef.current = false
         setScraping(false)
-        const text = toFeedText(msg.data, "Stopped with an error")
+        const text = sanitizeFeedMessage(msg.data, "Search could not be completed")
         setRuntimeStatus(text)
         pushFeedMessage(text, "error")
         clearActiveJob()
@@ -1582,7 +1606,7 @@ export default function DashboardPage({ user, onLogout }) {
                   <div className="dashboard-progress-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                       {scraping && <span className="stat-pill"><span className="dot" /> Running</span>}
-                      <span style={{ fontSize: 13, color: "var(--text-secondary)" }}>{progress.query || runtimeStatus || "Fetching results..."}</span>
+                      <span style={{ fontSize: 13, color: "var(--text-secondary)" }}>{runtimeStatus || "Fetching results..."}</span>
                     </div>
                     <span style={{ fontSize: 13, fontFamily: "var(--font-mono)", color: "var(--accent-cyan)" }}>{progress.current}/{progress.total}</span>
                   </div>
@@ -1591,7 +1615,7 @@ export default function DashboardPage({ user, onLogout }) {
                   {!!runtimeStatus && <div style={{ marginTop: 8, fontSize: 12, color: "var(--accent-gold)" }}>{runtimeStatus}</div>}
                   {scraping && liveUrl.name && (
                     <div className="dashboard-live-url" style={{ marginTop: 10, padding: "10px 14px", background: "var(--bg-surface)", borderRadius: "var(--radius-sm)", fontSize: 12 }}>
-                      <div style={{ color: "var(--accent-cyan)", fontWeight: 600, marginBottom: 4 }}>Now scraping: {liveUrl.name}</div>
+                      <div style={{ color: "var(--accent-cyan)", fontWeight: 600, marginBottom: 4 }}>Search in progress</div>
                       {liveUrl.maps_url && (
                         <a href={liveUrl.maps_url} target="_blank" rel="noreferrer" style={{ color: "var(--text-muted)", fontSize: 11, textDecoration: "none", wordBreak: "break-all" }}>
                           📍 {liveUrl.maps_url.substring(0, 80)}...
@@ -1649,12 +1673,6 @@ export default function DashboardPage({ user, onLogout }) {
                             full: "var(--accent-green)",
                             unreachable: "var(--text-muted)",
                           }[lead.website_status] || "var(--text-muted)"
-                          const srcColor = {
-                            maps: "var(--accent-cyan)",
-                            google_maps: "var(--accent-cyan)",
-                            justdial: "var(--accent-violet)",
-                            indiamart: "var(--accent-gold)",
-                          }[lead.source] || "var(--text-muted)"
                           const listingUrl = lead.listing_url || lead["Maps URL"] || ""
                           return (
                             <div key={`mobile-${i}`} className="dashboard-live-card">
@@ -1664,7 +1682,6 @@ export default function DashboardPage({ user, onLogout }) {
                                 <div>Phone: {toDisplayPhone(lead) || "—"}</div>
                                 <div>Email: {toDisplayEmail(lead) || "—"}</div>
                                 <div style={{ color: wsColor }}>Web status: {lead.website_status || "—"}</div>
-                                <div style={{ color: srcColor }}>Source: {lead.source || "—"}</div>
                               </div>
                               <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
                                 {(lead.Website || lead.website) ? (
@@ -1692,7 +1709,6 @@ export default function DashboardPage({ user, onLogout }) {
                             <th>Email</th>
                             <th>Website</th>
                             <th>Web Status</th>
-                            <th>Source</th>
                             <th>Listing</th>
                           </tr>
                         </thead>
@@ -1705,12 +1721,6 @@ export default function DashboardPage({ user, onLogout }) {
                             full:        "var(--accent-green)",
                             unreachable: "var(--text-muted)",
                           }[lead.website_status] || "var(--text-muted)"
-                          const srcColor = {
-                            maps: "var(--accent-cyan)",
-                            google_maps: "var(--accent-cyan)",
-                            justdial:    "var(--accent-violet)",
-                            indiamart:   "var(--accent-gold)",
-                          }[lead.source] || "var(--text-muted)"
                           const listingUrl = lead.listing_url || lead["Maps URL"] || ""
                           return (
                             <tr key={i}>
@@ -1735,11 +1745,6 @@ export default function DashboardPage({ user, onLogout }) {
                               <td>
                                 <span style={{ fontSize:11, color: wsColor, fontWeight:600 }}>
                                   {lead.website_status || "—"}
-                                </span>
-                              </td>
-                              <td>
-                                <span style={{ fontSize:11, color: srcColor, fontWeight:600 }}>
-                                  {lead.source || "—"}
                                 </span>
                               </td>
                               <td>
