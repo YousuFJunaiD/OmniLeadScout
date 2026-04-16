@@ -1,35 +1,6 @@
-# Generated lead exports and scrape artifacts
-output/
-leadscout/output/
-_archive/output/
-
-# Extra protection: any CSV/JSON dropped inside output folders
-**/output/*.csv
-**/output/*.json
-
-# Local scraper state
-leadscout/backend/seen_leads.json
-_archive/seen_leads.json
-
-# Local env and secrets
 .env
-.env.*
-!.env.example
-!**/.env.example
-
-# Python
-venv/
-**/venv/
-__pycache__/
-**/__pycache__/
-*.pyc
-*.db
-
-# Node
+.env*
 node_modules/
-**/node_modules/
 dist/
-**/dist/
-
-# OS/editor noise
+.git_old/
 .DS_Store
