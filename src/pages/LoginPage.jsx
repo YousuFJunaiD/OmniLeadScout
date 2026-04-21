@@ -3,15 +3,7 @@ import { useEffect, useState } from "react"
 import { Link, useNavigate } from "react-router-dom"
 import SparklesBg from "../components/SparklesBg"
 import { apiUrl, getApiHeaders } from "../lib/api"
-
-const toReadableError = (value, fallback = "Something went wrong") => {
-  if (!value) return fallback
-  if (typeof value === "string") return value
-  if (typeof value === "object") {
-    return value.error || value.detail || value.message || fallback
-  }
-  return fallback
-}
+import { toReadableError } from "../lib/errors"
 
 export default function LoginPage({ onLogin, forcedLogoutMessage = "", onForcedLogoutMessageShown }) {
   const [mode, setMode]     = useState("login")

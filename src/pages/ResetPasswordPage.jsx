@@ -3,15 +3,7 @@ import { useMemo, useState } from "react"
 import { Link, useNavigate, useSearchParams } from "react-router-dom"
 import SparklesBg from "../components/SparklesBg"
 import { apiUrl, getApiHeaders } from "../lib/api"
-
-const toReadableError = (value, fallback) => {
-  if (!value) return fallback
-  if (typeof value === "string") return value
-  if (typeof value === "object") {
-    return value.error || value.detail || value.message || fallback
-  }
-  return fallback
-}
+import { toReadableError } from "../lib/errors"
 
 export default function ResetPasswordPage() {
   const [searchParams] = useSearchParams()

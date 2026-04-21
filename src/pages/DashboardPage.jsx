@@ -5,6 +5,7 @@ import Nav from "../components/Nav"
 import SparklesBg from "../components/SparklesBg"
 import { authFetch, canDownloadCsv, getAuthHeaders } from "../lib/auth"
 import { apiUrl, wsUrl } from "../lib/api"
+import { toReadableError as sharedToReadableError } from "../lib/errors"
 
 const LIVE_FEED_MAX_ROWS = 200
 const LIVE_FEED_FLUSH_MS = 700
@@ -513,27 +514,8 @@ export default function DashboardPage({ user, onLogout }) {
   const toDisplayPhone = (lead) => lead?.Phone || lead?.phone || ""
   const toDisplayEmail = (lead) => lead?.Email || lead?.email || lead?.Owner_Email_Guesses?.split(" | ")[0] || ""
 
-  const toReadableError = (value, fallback = "Something went wrong") => {
-    if (!value) return fallback
-    if (typeof value === "string") {
-      const lower = value.toLowerCase()
-      if (lower.includes("failed to fetch") || lower.includes("networkerror") || lower.includes("load failed") || lower.includes("cors")) {
-        return "Connection issue. Retrying..."
-      }
-      if (lower.includes("session invalid") || lower.includes("another device") || lower.includes("authorization")) {
-        return "Your session has expired. Please sign in again."
-      }
-      if (lower.includes("internal server error")) {
-        return "We couldn't start this search. Please try again."
-      }
-      return value
-    }
-    if (typeof value === "object") {
-      const raw = value.error || value.detail || value.message || fallback
-      return toReadableError(raw, fallback)
-    }
-    return fallback
-  }
+  const toReadableError = (value, fallback = "Something went wrong") =>
+    sharedToReadableError(value, fallback)
 
   const toFeedText = (value, fallback = "") => {
     if (value == null) return fallback

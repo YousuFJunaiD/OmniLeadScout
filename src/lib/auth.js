@@ -1,4 +1,5 @@
 import { apiUrl, getApiHeaders } from "./api"
+import { toErrorString } from "./errors"
 
 const TOKEN_KEY = "ls_token"
 const USER_KEY = "ls_user"
@@ -104,7 +105,7 @@ async function readUnauthorizedMessage(response) {
     const contentType = clone.headers.get("content-type") || ""
     if (contentType.includes("application/json")) {
       const data = await clone.json()
-      return data?.detail || data?.error || data?.message || ""
+      return toErrorString(data?.detail || data?.error || data?.message || data)
     }
     return await clone.text()
   } catch {
