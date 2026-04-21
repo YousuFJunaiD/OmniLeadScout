@@ -1,6 +1,10 @@
 .env
 .env*
+!.env.example
 node_modules/
 dist/
 .git_old/
 .DS_Store
+# iCloud/Dropbox sync collision artifacts
+* 2.*
+* 2/
