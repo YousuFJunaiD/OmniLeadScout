@@ -513,6 +513,15 @@ export default function DashboardPage({ user, onLogout }) {
 
   const toDisplayPhone = (lead) => lead?.Phone || lead?.phone || ""
   const toDisplayEmail = (lead) => lead?.Email || lead?.email || lead?.Owner_Email_Guesses?.split(" | ")[0] || ""
+  const normalizePersistedStats = (source = {}) => {
+    const nested = source.account_stats || source.lead_stats || {}
+    return {
+      total: Number(nested.total_leads ?? source.total_leads ?? source.lead_count ?? 0),
+      withOwner: Number(nested.with_owner_count ?? nested.with_contact_count ?? source.with_owner_count ?? source.with_contact_count ?? 0),
+      withEmail: Number(nested.with_email_count ?? source.with_email_count ?? 0),
+      withWebsite: Number(nested.with_website_count ?? source.with_website_count ?? 0),
+    }
+  }
 
   const toReadableError = (value, fallback = "Something went wrong") =>
     sharedToReadableError(value, fallback)
@@ -618,6 +627,7 @@ export default function DashboardPage({ user, onLogout }) {
   }
 
   const getStatusMessage = (status, fallback = "") => {
+    if (status === "completed") return "Completed"
     if (fallback) {
       const text = String(fallback).toLowerCase()
       if (text.includes("saving")) return "Finalizing..."
@@ -627,7 +637,6 @@ export default function DashboardPage({ user, onLogout }) {
     }
     if (status === "pending") return "Fetching results..."
     if (status === "running") return "Processing leads..."
-    if (status === "completed") return "Finalizing..."
     if (status === "no_results") return "No data found. Try broader query or different location."
     if (status === "low_data") return "Limited contact data available, showing best matches"
     if (status === "source_error") return "Source timeout or block detected. Try broader query or different location."
@@ -651,12 +660,17 @@ export default function DashboardPage({ user, onLogout }) {
   }, [scraping, progress.total, progress.current, runtimeStatus, progress.query, feedMessages])
 
   const currentStageIndex = Math.max(0, stageOrder.indexOf(currentStage))
+  const completedDisplay = !scraping && String(runtimeStatus || "").toLowerCase().includes("completed")
+  const currentStageLabel = completedDisplay ? "Completed" : stageMeta[currentStage]?.label || "Searching"
+  const currentStageDetail = completedDisplay ? "Saving leads complete." : stageMeta[currentStage]?.detail || "Finding your best matches"
 
   const applyStatusSnapshot = (status) => {
     if (!status) return
+    const terminal = !status.running && ["completed", "stopped", "failed", "no_results", "low_data", "source_error"].includes(status.status)
+    const nextTotal = Number(status.total_areas ?? progress.total ?? 0)
     setProgress((prev) => ({
-      current: Number(status.processed_areas ?? prev.current ?? 0),
-      total: Number(status.total_areas ?? prev.total ?? 0),
+      current: status.status === "completed" ? Number(status.total_areas ?? status.processed_areas ?? prev.total ?? prev.current ?? 0) : Number(status.processed_areas ?? prev.current ?? 0),
+      total: nextTotal || Number(prev.total ?? 0),
       query: "",
     }))
     setRuntimeStatus(
@@ -666,10 +680,16 @@ export default function DashboardPage({ user, onLogout }) {
       )
     )
     if (typeof status.lead_count === "number") {
+      const persistedStats = normalizePersistedStats(status)
       setStats((prev) => ({
-        ...prev,
-        total: Math.max(prev.total, Number(status.lead_count || 0)),
+        total: Math.max(prev.total, persistedStats.total, Number(status.lead_count || 0)),
+        withOwner: Math.max(prev.withOwner, persistedStats.withOwner),
+        withEmail: Math.max(prev.withEmail, persistedStats.withEmail),
+        withWebsite: Math.max(prev.withWebsite, persistedStats.withWebsite),
       }))
+    }
+    if (terminal) {
+      setCanDownload((status.lead_count || 0) > 0)
     }
     for (const event of status.recent_events || []) {
       const type = event?.type || "info"
@@ -831,6 +851,7 @@ export default function DashboardPage({ user, onLogout }) {
       if (!res.ok) throw new Error("usage failed")
       const data = await res.json()
       setUsage(data)
+      setStats(normalizePersistedStats(data))
     } catch {
       setUsage(null)
     }
@@ -1212,6 +1233,17 @@ export default function DashboardPage({ user, onLogout }) {
       if (!res.ok) throw new Error("history failed")
       const data = await res.json()
       setHistory(data.history || [])
+      if (!scraping && !localStorage.getItem(ACTIVE_JOB_KEY)) {
+        const totals = (data.history || []).reduce((acc, job) => {
+          const item = normalizePersistedStats(job)
+          acc.total += item.total
+          acc.withOwner += item.withOwner
+          acc.withEmail += item.withEmail
+          acc.withWebsite += item.withWebsite
+          return acc
+        }, { total: 0, withOwner: 0, withEmail: 0, withWebsite: 0 })
+        setStats((prev) => totals.total > 0 ? totals : prev)
+      }
     } catch {}
   }
 
@@ -1700,7 +1732,7 @@ export default function DashboardPage({ user, onLogout }) {
                   <div className="dashboard-progress-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                       {scraping && <span className="stat-pill"><span className="dot" /> Running</span>}
-                      <span style={{ fontSize: 13, color: "var(--text-secondary)" }}>{stageMeta[currentStage]?.label || "Searching"}</span>
+                      <span style={{ fontSize: 13, color: "var(--text-secondary)" }}>{currentStageLabel}</span>
                     </div>
                     <span style={{ fontSize: 13, fontFamily: "var(--font-mono)", color: "var(--accent-cyan)" }}>{progress.current}/{progress.total}</span>
                   </div>
@@ -1766,8 +1798,8 @@ export default function DashboardPage({ user, onLogout }) {
                         </div>
                       )}
                       <div>
-                        <div style={{ fontSize: 12, fontWeight: 700, color: "var(--text-primary)" }}>{stageMeta[currentStage]?.label || "Searching"}</div>
-                        <div style={{ fontSize: 11, color: "var(--text-muted)" }}>{stageMeta[currentStage]?.detail || "Finding your best matches"}</div>
+                        <div style={{ fontSize: 12, fontWeight: 700, color: "var(--text-primary)" }}>{currentStageLabel}</div>
+                        <div style={{ fontSize: 11, color: "var(--text-muted)" }}>{currentStageDetail}</div>
                       </div>
                     </div>
                     <div style={{ fontSize: 11, color: "var(--text-muted)", textAlign: "right" }}>{pct}% complete</div>
@@ -1812,10 +1844,10 @@ export default function DashboardPage({ user, onLogout }) {
                         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16 }}>
                           <div>
                             <div style={{ fontSize: 11, letterSpacing: "0.12em", textTransform: "uppercase", color: "var(--accent-cyan)", marginBottom: 8 }}>
-                              {stageMeta[currentStage]?.label || "Searching"}
+                              {currentStageLabel}
                             </div>
                             <div style={{ fontSize: 18, fontWeight: 700, color: "var(--text-primary)" }}>
-                              {sanitizeFeedMessage(runtimeStatus || feedMessages[0]?.text || stageMeta[currentStage]?.detail || "Searching your selected area", stageMeta[currentStage]?.detail || "Searching your selected area")}
+                              {sanitizeFeedMessage(runtimeStatus || feedMessages[0]?.text || currentStageDetail, currentStageDetail)}
                             </div>
                           </div>
                           {scraping && (
@@ -1971,7 +2003,7 @@ export default function DashboardPage({ user, onLogout }) {
                             {h.profession} — {h.location || "Unknown"}
                           </div>
                           <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 2 }}>
-                            {h.effective_lead_count || h.lead_count || 0} leads · {h.processed_areas || 0}/{h.total_areas || "?"} areas ·{" "}
+                            {h.effective_lead_count || h.lead_count || 0} leads · {h.with_website_count || 0} websites · {h.with_email_count || 0} emails · {h.with_owner_count || h.with_contact_count || 0} contacts ·{" "}
                             <span className={`badge ${getStatusBadgeClass(h.status)}`}>
                               {h.status}
                             </span>
