@@ -1,12 +1,9 @@
-const DEFAULT_API_BASE = "http://159.89.168.191:8000"
-const DEFAULT_WS_BASE = "ws://159.89.168.191:8000"
+function cleanBaseUrl(value = "") {
+  return String(value || "").trim().replace(/\/+$/, "")
+}
 
-export const API = import.meta.env.VITE_API_URL || DEFAULT_API_BASE
-export const WS = import.meta.env.VITE_WS_URL || (
-  /^https?:\/\//.test(API)
-    ? API.replace(/^http:/, "ws:").replace(/^https:/, "wss:")
-    : DEFAULT_WS_BASE
-)
+export const API = cleanBaseUrl(import.meta.env.VITE_API_URL)
+export const WS = cleanBaseUrl(import.meta.env.VITE_WS_URL)
 
 const DEFAULT_HEADERS = {
   "Content-Type": "application/json",
@@ -22,6 +19,7 @@ export function getApiHeaders(headers = {}) {
 
 export function apiUrl(path = "") {
   if (/^https?:\/\//.test(path)) return path
+  if (!API) throw new Error("Missing VITE_API_URL")
 
   let normalizedPath = path.startsWith("/") ? path : `/${path}`
   if (normalizedPath === "/api") normalizedPath = ""
@@ -32,6 +30,7 @@ export function apiUrl(path = "") {
 
 export function wsUrl(path = "") {
   if (/^wss?:\/\//.test(path)) return path
+  if (!WS) throw new Error("Missing VITE_WS_URL")
 
   let normalizedPath = path.startsWith("/") ? path : `/${path}`
   if (normalizedPath === "/api") normalizedPath = ""
